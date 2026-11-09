@@ -1,0 +1,639 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:sqflite/sqflite.dart';
+
+import '../polar/models.dart';
+import '../polar/packed_recording.dart';
+import 'acc_codec.dart';
+import 'db.dart';
+import 'polar_time.dart';
+
+/// Row of `recordings`.
+class RecordingRow {
+  RecordingRow.fromMap(Map<String, Object?> m)
+    : id = m['id'] as int,
+      deviceId = m['device_id'] as String,
+      type = PolarDataType.fromWire(m['type'] as String),
+      startMs = m['start_ms'] as int,
+      endMs = m['end_ms'] as int,
+      sampleCount = m['sample_count'] as int,
+      rateHz = m['rate_hz'] as int?,
+      range = m['range'] as int?,
+      source = m['source'] as String,
+      path = m['path'] as String?,
+      fetchedMs = m['fetched_ms'] as int,
+      sentMs = m['sent_ms'] as int?;
+
+  final int id;
+  final String deviceId;
+  final PolarDataType type;
+  final int startMs;
+  final int endMs;
+  final int sampleCount;
+  final int? rateHz;
+  final int? range;
+  final String source;
+  final String? path;
+  final int fetchedMs;
+  final int? sentMs;
+
+  bool get sent => sentMs != null;
+  Duration get duration => Duration(milliseconds: endMs - startMs);
+}
+
+/// One aggregate bucket (a minute, or coarser when requested).
+class StatBucket {
+  StatBucket({
+    required this.startMs,
+    required this.n,
+    required this.mean,
+    required this.min,
+    required this.max,
+    this.extra,
+  });
+
+  final int startMs;
+  final int n;
+  final double mean;
+  final double min;
+  final double max;
+
+  /// PPI: RMSSD in ms. ACC: standard deviation of |a| in mG. HR: null.
+  final double? extra;
+}
+
+class HrRow {
+  HrRow(this.tsMs, this.hr, this.contact);
+  final int tsMs;
+  final int hr;
+  final bool contact;
+}
+
+class PpiRow {
+  PpiRow({
+    required this.tsMs,
+    required this.ppi,
+    required this.errorEstimate,
+    required this.hr,
+    required this.blocker,
+    required this.skinContact,
+  });
+  final int tsMs;
+  final int ppi;
+  final int errorEstimate;
+  final int hr;
+  final bool blocker;
+  final bool skinContact;
+}
+
+class AccChunkRow {
+  AccChunkRow({
+    required this.id,
+    required this.startMs,
+    required this.endMs,
+    required this.sampleCount,
+    required this.rateHz,
+  });
+  final int id;
+  final int startMs;
+  final int endMs;
+  final int sampleCount;
+  final int rateHz;
+}
+
+class SyncLogRow {
+  SyncLogRow(this.tsMs, this.level, this.message);
+  final int tsMs;
+  final String level;
+  final String message;
+}
+
+/// All reads and writes of [HeildDb]. Ingest runs in one transaction per
+/// recording and maintains `minute_stats` so graphs never scan raw samples.
+class Repository {
+  Repository(this._db);
+
+  final HeildDb _db;
+  Database get db => _db.db;
+
+  // ---- settings -------------------------------------------------------------
+
+  Future<String?> getSetting(String key) async {
+    final rows = await db.query(
+      'settings',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: [key],
+    );
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  Future<void> setSetting(String key, String? value) async {
+    if (value == null) {
+      await db.delete('settings', where: 'key = ?', whereArgs: [key]);
+    } else {
+      await db.insert('settings', {
+        'key': key,
+        'value': value,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+  }
+
+  // ---- ingest ---------------------------------------------------------------
+
+  /// Stores a fetched recording and returns its id. A recording with the same
+  /// device, type and start replaces the earlier copy (re-fetch after a failed
+  /// delete on the sensor).
+  Future<int> storeRecording(
+    String deviceId,
+    PackedRecording r, {
+    String? path,
+    int Function()? now,
+  }) async {
+    final nowMs = (now ?? () => DateTime.now().millisecondsSinceEpoch)();
+    final startMs = localIsoToUnixMs(r.startTimeIso);
+    return db.transaction((txn) async {
+      await txn.delete(
+        'recordings',
+        where: 'device_id = ? AND type = ? AND start_ms = ?',
+        whereArgs: [deviceId, r.type.wire, startMs],
+      );
+      final endMs = switch (r.type) {
+        PolarDataType.hr => _hrEnd(startMs, r),
+        PolarDataType.ppi => _ppiEnd(startMs, r),
+        _ => _tsEnd(startMs, r),
+      };
+      final id = await txn.insert('recordings', {
+        'device_id': deviceId,
+        'type': r.type.wire,
+        'start_ms': startMs,
+        'end_ms': endMs,
+        'sample_count': r.sampleCount,
+        'rate_hz': r.sampleRateHz,
+        'range': r.range,
+        'settings_json': r.settings == null
+            ? null
+            : jsonEncode({
+                for (final e in r.settings!.options.entries)
+                  e.key.wire: e.value,
+              }),
+        'source': 'offline',
+        'path': path,
+        'fetched_ms': nowMs,
+      });
+      switch (r.type) {
+        case PolarDataType.hr:
+          await _storeHr(txn, id, startMs, r);
+        case PolarDataType.ppi:
+          await _storePpi(txn, id, startMs, r);
+        case PolarDataType.acc:
+          await _storeAcc(txn, id, r);
+        default:
+          // Other types are kept as a recording row only (no viewer yet).
+          break;
+      }
+      return id;
+    });
+  }
+
+  int _hrEnd(int startMs, PackedRecording r) =>
+      startMs + math.max(0, r.sampleCount - 1) * 1000;
+
+  int _ppiEnd(int startMs, PackedRecording r) {
+    final ppi = r.ppi;
+    if (ppi == null || ppi.isEmpty) return startMs;
+    final ts = ppiTimestamps(startMs, ppi, r.ts ?? Int64List(0));
+    return ts.last;
+  }
+
+  int _tsEnd(int startMs, PackedRecording r) {
+    final ts = r.ts;
+    if (ts == null || ts.isEmpty) return startMs;
+    return polarNsToUnixMs(ts.last);
+  }
+
+  Future<void> _storeHr(
+    Transaction txn,
+    int id,
+    int startMs,
+    PackedRecording r,
+  ) async {
+    final hr = r.hr!;
+    final flags = r.flags ?? Uint8List(hr.length);
+    final ts = hrTimestamps(startMs, hr.length);
+    final batch = txn.batch();
+    final stats = _MinuteAccumulator('HR');
+    for (var i = 0; i < hr.length; i++) {
+      final contact = i < flags.length && (flags[i] & 1) != 0;
+      batch.insert('hr_samples', {
+        'recording_id': id,
+        'ts_ms': ts[i],
+        'hr': hr[i],
+        'contact': contact ? 1 : 0,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      if (hr[i] > 0) stats.add(ts[i], hr[i].toDouble());
+    }
+    await batch.commit(noResult: true);
+    await stats.flush(txn);
+  }
+
+  Future<void> _storePpi(
+    Transaction txn,
+    int id,
+    int startMs,
+    PackedRecording r,
+  ) async {
+    final ppi = r.ppi!;
+    final err = r.errorEstimate ?? Int32List(ppi.length);
+    final hr = r.hr ?? Int32List(ppi.length);
+    final flags = r.flags ?? Uint8List(ppi.length);
+    final ts = ppiTimestamps(startMs, ppi, r.ts ?? Int64List(0));
+    final batch = txn.batch();
+    final stats = _MinuteAccumulator('PPI', rmssd: true);
+    var lastTs = -1;
+    for (var i = 0; i < ppi.length; i++) {
+      // Two samples can share a millisecond when device stamps repeat.
+      var t = ts[i];
+      if (t <= lastTs) t = lastTs + 1;
+      lastTs = t;
+      final blocker = (flags[i] & 1) != 0;
+      batch.insert('ppi_samples', {
+        'recording_id': id,
+        'ts_ms': t,
+        'ppi': ppi[i],
+        'error_estimate': err[i],
+        'hr': hr[i],
+        'blocker': blocker ? 1 : 0,
+        'skin_contact': (flags[i] & 2) != 0 ? 1 : 0,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      if (!blocker && ppi[i] > 0) stats.add(t, ppi[i].toDouble());
+    }
+    await batch.commit(noResult: true);
+    await stats.flush(txn);
+  }
+
+  Future<void> _storeAcc(Transaction txn, int id, PackedRecording r) async {
+    final ts = r.ts!;
+    final xyz = r.xyz!;
+    final rate = r.sampleRateHz ?? 52;
+    final n = ts.length;
+    if (n == 0) return;
+    final unix = List<int>.generate(n, (i) => polarNsToUnixMs(ts[i]));
+    final stats = _MinuteAccumulator('ACC', stddev: true);
+    final batch = txn.batch();
+    var chunkStart = 0;
+    var minute = minuteFloor(unix[0]);
+    for (var i = 0; i <= n; i++) {
+      final boundary = i == n || minuteFloor(unix[i]) != minute;
+      if (boundary) {
+        final count = i - chunkStart;
+        batch.insert('acc_chunks', {
+          'recording_id': id,
+          'start_ms': unix[chunkStart],
+          'end_ms': unix[i - 1],
+          'sample_count': count,
+          'rate_hz': rate,
+          'data': encodeAccChunk(xyz, chunkStart, count),
+        });
+        if (i < n) {
+          chunkStart = i;
+          minute = minuteFloor(unix[i]);
+        }
+      }
+      if (i < n) {
+        final x = xyz[i * 3].toDouble();
+        final y = xyz[i * 3 + 1].toDouble();
+        final z = xyz[i * 3 + 2].toDouble();
+        stats.add(unix[i], math.sqrt(x * x + y * y + z * z));
+      }
+    }
+    await batch.commit(noResult: true);
+    await stats.flush(txn);
+  }
+
+  // ---- queries --------------------------------------------------------------
+
+  /// Aggregates of [type] between [fromMs] and [toMs], grouped into buckets of
+  /// [bucketMs] (60 000 for raw minutes). Buckets are aligned to [alignMs] so
+  /// a day view in local time starts at local midnight.
+  Future<List<StatBucket>> stats(
+    PolarDataType type,
+    int fromMs,
+    int toMs, {
+    int bucketMs = 60000,
+    int alignMs = 0,
+  }) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT ((minute_ms - ?) / ?) * ? + ? AS bucket,
+             SUM(n) AS n,
+             SUM(mean * n) / SUM(n) AS mean,
+             MIN(min) AS min,
+             MAX(max) AS max,
+             SUM(COALESCE(extra, 0) * n) / NULLIF(SUM(CASE WHEN extra IS NULL THEN 0 ELSE n END), 0) AS extra
+      FROM minute_stats
+      WHERE type = ? AND minute_ms >= ? AND minute_ms < ?
+      GROUP BY bucket ORDER BY bucket''',
+      [alignMs, bucketMs, bucketMs, alignMs, type.wire, fromMs, toMs],
+    );
+    return [
+      for (final m in rows)
+        StatBucket(
+          startMs: m['bucket'] as int,
+          n: m['n'] as int,
+          mean: (m['mean'] as num).toDouble(),
+          min: (m['min'] as num).toDouble(),
+          max: (m['max'] as num).toDouble(),
+          extra: (m['extra'] as num?)?.toDouble(),
+        ),
+    ];
+  }
+
+  Future<List<RecordingRow>> recordings({
+    PolarDataType? type,
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    final rows = await db.query(
+      'recordings',
+      where: type == null ? null : 'type = ?',
+      whereArgs: type == null ? null : [type.wire],
+      orderBy: 'start_ms DESC',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map(RecordingRow.fromMap).toList();
+  }
+
+  Future<RecordingRow?> recording(int id) async {
+    final rows = await db.query('recordings', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : RecordingRow.fromMap(rows.first);
+  }
+
+  Future<int> recordingCount() async =>
+      Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM recordings'),
+      ) ??
+      0;
+
+  Future<List<HrRow>> hrRows(
+    int recordingId, {
+    int limit = 500,
+    int offset = 0,
+  }) async {
+    final rows = await db.query(
+      'hr_samples',
+      where: 'recording_id = ?',
+      whereArgs: [recordingId],
+      orderBy: 'ts_ms',
+      limit: limit,
+      offset: offset,
+    );
+    return [
+      for (final m in rows)
+        HrRow(m['ts_ms'] as int, m['hr'] as int, (m['contact'] as int) != 0),
+    ];
+  }
+
+  Future<List<PpiRow>> ppiRows(
+    int recordingId, {
+    int limit = 500,
+    int offset = 0,
+  }) async {
+    final rows = await db.query(
+      'ppi_samples',
+      where: 'recording_id = ?',
+      whereArgs: [recordingId],
+      orderBy: 'ts_ms',
+      limit: limit,
+      offset: offset,
+    );
+    return [
+      for (final m in rows)
+        PpiRow(
+          tsMs: m['ts_ms'] as int,
+          ppi: m['ppi'] as int,
+          errorEstimate: m['error_estimate'] as int,
+          hr: m['hr'] as int,
+          blocker: (m['blocker'] as int) != 0,
+          skinContact: (m['skin_contact'] as int) != 0,
+        ),
+    ];
+  }
+
+  Future<List<AccChunkRow>> accChunks(
+    int recordingId, {
+    int limit = 500,
+    int offset = 0,
+  }) async {
+    final rows = await db.query(
+      'acc_chunks',
+      columns: ['id', 'start_ms', 'end_ms', 'sample_count', 'rate_hz'],
+      where: 'recording_id = ?',
+      whereArgs: [recordingId],
+      orderBy: 'start_ms',
+      limit: limit,
+      offset: offset,
+    );
+    return [
+      for (final m in rows)
+        AccChunkRow(
+          id: m['id'] as int,
+          startMs: m['start_ms'] as int,
+          endMs: m['end_ms'] as int,
+          sampleCount: m['sample_count'] as int,
+          rateHz: m['rate_hz'] as int,
+        ),
+    ];
+  }
+
+  /// Raw samples of one chunk as interleaved x, y, z in mG.
+  Future<Int32List> accChunkSamples(int chunkId) async {
+    final rows = await db.query(
+      'acc_chunks',
+      columns: ['data'],
+      where: 'id = ?',
+      whereArgs: [chunkId],
+    );
+    if (rows.isEmpty) return Int32List(0);
+    return decodeAccChunk(rows.first['data'] as Uint8List);
+  }
+
+  /// Latest minute with data per type, for "last seen" displays.
+  Future<int?> latestMinute(PolarDataType type) async => Sqflite.firstIntValue(
+    await db.rawQuery(
+      'SELECT MAX(minute_ms) FROM minute_stats WHERE type = ?',
+      [type.wire],
+    ),
+  );
+
+  // ---- maintenance ----------------------------------------------------------
+
+  Future<void> markSent(int recordingId, bool sent, {int? nowMs}) => db.update(
+    'recordings',
+    {'sent_ms': sent ? (nowMs ?? DateTime.now().millisecondsSinceEpoch) : null},
+    where: 'id = ?',
+    whereArgs: [recordingId],
+  );
+
+  Future<void> deleteRecording(int recordingId) =>
+      db.delete('recordings', where: 'id = ?', whereArgs: [recordingId]);
+
+  /// Deletes recordings that ended more than [days] ago **and** were marked
+  /// sent, then drops minute stats no recording covers any more. Returns the
+  /// number of recordings removed.
+  Future<int> retention({int days = 30, int? nowMs}) async {
+    final cutoff =
+        (nowMs ?? DateTime.now().millisecondsSinceEpoch) - days * 86400000;
+    return db.transaction((txn) async {
+      final removed = await txn.delete(
+        'recordings',
+        where: 'end_ms < ? AND sent_ms IS NOT NULL',
+        whereArgs: [cutoff],
+      );
+      await txn.rawDelete(
+        '''
+        DELETE FROM minute_stats WHERE minute_ms < ? AND NOT EXISTS (
+          SELECT 1 FROM recordings r
+          WHERE r.type = minute_stats.type
+            AND r.start_ms < minute_stats.minute_ms + 60000
+            AND r.end_ms >= minute_stats.minute_ms)''',
+        [cutoff],
+      );
+      return removed;
+    });
+  }
+
+  Future<int> databaseSizeBytes() async {
+    if (_db.path == inMemoryDatabasePath) return 0;
+    var total = 0;
+    for (final suffix in const ['', '-wal', '-shm']) {
+      final f = File('${_db.path}$suffix');
+      if (await f.exists()) total += await f.length();
+    }
+    return total;
+  }
+
+  Future<void> vacuum() => db.execute('VACUUM');
+
+  // ---- sync log -------------------------------------------------------------
+
+  Future<void> log(String level, String message, {int? nowMs}) async {
+    await db.insert('sync_log', {
+      'ts_ms': nowMs ?? DateTime.now().millisecondsSinceEpoch,
+      'level': level,
+      'message': message,
+    });
+    await db.rawDelete(
+      'DELETE FROM sync_log WHERE id NOT IN (SELECT id FROM sync_log ORDER BY id DESC LIMIT 2000)',
+    );
+  }
+
+  Future<List<SyncLogRow>> syncLog({int limit = 200}) async {
+    final rows = await db.query('sync_log', orderBy: 'id DESC', limit: limit);
+    return [
+      for (final m in rows)
+        SyncLogRow(
+          m['ts_ms'] as int,
+          m['level'] as String,
+          m['message'] as String,
+        ),
+    ];
+  }
+}
+
+/// Accumulates per-minute statistics during ingest and merges them into
+/// `minute_stats` (weighted by sample count when a minute already exists).
+class _MinuteAccumulator {
+  _MinuteAccumulator(this.type, {this.rmssd = false, this.stddev = false});
+
+  final String type;
+  final bool rmssd;
+  final bool stddev;
+  final Map<int, _Acc> _minutes = {};
+
+  void add(int tsMs, double value) {
+    final m = minuteFloor(tsMs);
+    final a = _minutes.putIfAbsent(m, _Acc.new);
+    a.n++;
+    a.sum += value;
+    a.sumSq += value * value;
+    if (value < a.min) a.min = value;
+    if (value > a.max) a.max = value;
+    if (rmssd) {
+      if (a.hasPrev) {
+        final d = value - a.prev;
+        a.diffSq += d * d;
+        a.diffs++;
+      }
+      a.prev = value;
+      a.hasPrev = true;
+    }
+  }
+
+  Future<void> flush(Transaction txn) async {
+    for (final e in _minutes.entries) {
+      final a = e.value;
+      final mean = a.sum / a.n;
+      double? extra;
+      if (rmssd) {
+        extra = a.diffs > 0 ? math.sqrt(a.diffSq / a.diffs) : null;
+      } else if (stddev) {
+        final v = a.sumSq / a.n - mean * mean;
+        extra = math.sqrt(v < 0 ? 0 : v);
+      }
+      final existing = await txn.query(
+        'minute_stats',
+        where: 'type = ? AND minute_ms = ?',
+        whereArgs: [type, e.key],
+      );
+      if (existing.isEmpty) {
+        await txn.insert('minute_stats', {
+          'type': type,
+          'minute_ms': e.key,
+          'n': a.n,
+          'mean': mean,
+          'min': a.min,
+          'max': a.max,
+          'extra': extra,
+        });
+      } else {
+        final o = existing.first;
+        final on = o['n'] as int;
+        final total = on + a.n;
+        final oExtra = (o['extra'] as num?)?.toDouble();
+        await txn.update(
+          'minute_stats',
+          {
+            'n': total,
+            'mean': ((o['mean'] as num).toDouble() * on + mean * a.n) / total,
+            'min': math.min((o['min'] as num).toDouble(), a.min),
+            'max': math.max((o['max'] as num).toDouble(), a.max),
+            'extra': extra == null
+                ? oExtra
+                : oExtra == null
+                ? extra
+                : (oExtra * on + extra * a.n) / total,
+          },
+          where: 'type = ? AND minute_ms = ?',
+          whereArgs: [type, e.key],
+        );
+      }
+    }
+  }
+}
+
+class _Acc {
+  int n = 0;
+  double sum = 0;
+  double sumSq = 0;
+  double min = double.infinity;
+  double max = double.negativeInfinity;
+  double prev = 0;
+  bool hasPrev = false;
+  double diffSq = 0;
+  int diffs = 0;
+}
