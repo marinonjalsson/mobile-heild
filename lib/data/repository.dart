@@ -154,27 +154,46 @@ class Repository {
 
   /// Stores a fetched recording and returns its id. A recording with the same
   /// device, type and start replaces the earlier copy (re-fetch after a failed
-  /// delete on the sensor).
+  /// delete on the sensor); [replaceId] removes one more earlier copy first (a
+  /// live session whose start moved).
+  ///
+  /// [sampleTsMs] gives the sample times (Unix ms) for HR streamed live to the
+  /// phone, which arrives without timestamps and is stamped on arrival; offline
+  /// HR is one sample per second from the start.
+  ///
+  /// An offline HR recording wins over live HR for the span it covers: live
+  /// rows inside it are dropped so the minute stats count each second once.
   Future<int> storeRecording(
     String deviceId,
     PackedRecording r, {
     String? path,
     String source = 'offline',
+    List<int>? sampleTsMs,
+    int? replaceId,
     int Function()? now,
   }) async {
     final nowMs = (now ?? () => DateTime.now().millisecondsSinceEpoch)();
     final startMs = localIsoToUnixMs(r.startTimeIso);
     return db.transaction((txn) async {
+      if (replaceId != null) {
+        await txn.delete('recordings', where: 'id = ?', whereArgs: [replaceId]);
+      }
       await txn.delete(
         'recordings',
         where: 'device_id = ? AND type = ? AND start_ms = ?',
         whereArgs: [deviceId, r.type.wire, startMs],
       );
       final endMs = switch (r.type) {
-        PolarDataType.hr => _hrEnd(startMs, r),
+        PolarDataType.hr =>
+          sampleTsMs != null && sampleTsMs.isNotEmpty
+              ? sampleTsMs.last
+              : _hrEnd(startMs, r),
         PolarDataType.ppi => _ppiEnd(startMs, r),
         _ => _tsEnd(startMs, r),
       };
+      if (r.type == PolarDataType.hr && source == 'offline') {
+        await _trimLiveHr(txn, deviceId, startMs, endMs);
+      }
       final id = await txn.insert('recordings', {
         'device_id': deviceId,
         'type': r.type.wire,
@@ -195,7 +214,7 @@ class Repository {
       });
       switch (r.type) {
         case PolarDataType.hr:
-          await _storeHr(txn, id, startMs, r);
+          await _storeHr(txn, id, startMs, r, sampleTsMs);
         case PolarDataType.ppi:
           await _storePpi(txn, id, startMs, r);
         case PolarDataType.acc:
@@ -229,10 +248,13 @@ class Repository {
     int id,
     int startMs,
     PackedRecording r,
+    List<int>? sampleTsMs,
   ) async {
     final hr = r.hr!;
     final flags = r.flags ?? Uint8List(hr.length);
-    final ts = hrTimestamps(startMs, hr.length);
+    final ts = sampleTsMs != null && sampleTsMs.length == hr.length
+        ? sampleTsMs
+        : hrTimestamps(startMs, hr.length);
     final batch = txn.batch();
     final minutes = <int>{};
     for (var i = 0; i < hr.length; i++) {
@@ -252,6 +274,55 @@ class Repository {
     }
     await batch.commit(noResult: true);
     await _recomputeMinutes(txn, 'HR', minutes);
+  }
+
+  /// Drops live HR rows of [deviceId] inside [fromMs, toMs] (an offline
+  /// recording now covers them) and fixes or removes their recordings. A
+  /// sample stands for the second that follows it, so the last one at [toMs]
+  /// covers up to toMs + 999. The caller recomputes the minutes: offline HR
+  /// has a row in every one of them.
+  Future<void> _trimLiveHr(
+    Transaction txn,
+    String deviceId,
+    int fromMs,
+    int toMs,
+  ) async {
+    final live = await txn.query(
+      'recordings',
+      columns: ['id'],
+      where:
+          "device_id = ? AND type = 'HR' AND source = 'live' "
+          'AND start_ms <= ? AND end_ms >= ?',
+      whereArgs: [deviceId, toMs + 999, fromMs],
+    );
+    for (final row in live) {
+      final id = row['id'] as int;
+      await txn.delete(
+        'hr_samples',
+        where: 'recording_id = ? AND ts_ms >= ? AND ts_ms <= ?',
+        whereArgs: [id, fromMs, toMs + 999],
+      );
+      final left = await txn.rawQuery(
+        'SELECT COUNT(*) AS n, MIN(ts_ms) AS a, MAX(ts_ms) AS b '
+        'FROM hr_samples WHERE recording_id = ?',
+        [id],
+      );
+      final n = left.single['n'] as int;
+      if (n == 0) {
+        await txn.delete('recordings', where: 'id = ?', whereArgs: [id]);
+      } else {
+        await txn.update(
+          'recordings',
+          {
+            'sample_count': n,
+            'start_ms': left.single['a'] as int,
+            'end_ms': left.single['b'] as int,
+          },
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    }
   }
 
   Future<void> _storePpi(

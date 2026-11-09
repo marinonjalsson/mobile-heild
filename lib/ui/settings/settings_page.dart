@@ -176,11 +176,11 @@ class _StorageSectionState extends State<_StorageSection> {
     super.dispose();
   }
 
-  DateTime? _seenSync;
+  int _seenVersion = -1;
   void _onSync() {
-    // Recount after each finished sync; other notifications are progress.
-    if (appController.sync.lastSyncAt != _seenSync) {
-      _seenSync = appController.sync.lastSyncAt;
+    // Recount when the data changed; other notifications are progress.
+    if (appController.sync.dataVersion != _seenVersion) {
+      _seenVersion = appController.sync.dataVersion;
       _refresh();
     }
   }

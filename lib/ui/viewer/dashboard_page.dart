@@ -29,8 +29,8 @@ class DashboardPage extends StatelessWidget {
           children: [
             _SensorCard(app.device, app.sync),
             if (app.device.isConnected) _LiveHrCard(app.device),
-            _TodayCard(app.repo, refreshKey: app.sync.lastSyncAt),
-            _StorageCard(app.repo, refreshKey: app.sync.lastSyncAt),
+            _TodayCard(app.repo, refreshKey: app.sync.dataVersion),
+            _StorageCard(app.repo, refreshKey: app.sync.dataVersion),
           ],
         ),
       ),

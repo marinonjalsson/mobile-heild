@@ -295,6 +295,68 @@ void main() {
     expect(await repo.recording(keep), isNotNull);
   });
 
+  test('live HR yields to the offline recording that covers it', () async {
+    final t0 = DateTime(2026, 11, 9, 12).millisecondsSinceEpoch;
+    // Live: 180 s stamped on arrival, 12:00:00 – 12:02:59, hr 70.
+    final liveTs = List<int>.generate(180, (i) => t0 + i * 1000 + 37);
+    final liveId = await repo.storeRecording(
+      '24BE2139',
+      hrRecording(
+        DateTime.fromMillisecondsSinceEpoch(liveTs.first),
+        List.filled(180, 70),
+      ),
+      source: 'live',
+      sampleTsMs: liveTs,
+    );
+    var stats = await repo.stats(PolarDataType.hr, t0, t0 + 180000);
+    expect(stats.map((b) => b.n), [60, 60, 60]);
+
+    // Offline: 12:01:00 – 12:01:59, hr 80, covers the middle minute.
+    await repo.storeRecording(
+      '24BE2139',
+      hrRecording(
+        DateTime.fromMillisecondsSinceEpoch(t0 + 60000),
+        List.filled(60, 80),
+      ),
+    );
+    final live = (await repo.recording(liveId))!;
+    expect(live.sampleCount, 120);
+    expect(live.startMs, liveTs.first);
+    expect(live.endMs, liveTs.last);
+    stats = await repo.stats(PolarDataType.hr, t0, t0 + 180000);
+    expect(stats.map((b) => b.n), [60, 60, 60]); // still once per second
+    expect(stats.map((b) => b.mean), [70, 80, 70]);
+
+    // Offline recordings for the first and last minute leave nothing live.
+    for (final m in [0, 2]) {
+      await repo.storeRecording(
+        '24BE2139',
+        hrRecording(
+          DateTime.fromMillisecondsSinceEpoch(t0 + m * 60000),
+          List.filled(60, 90),
+        ),
+      );
+    }
+    expect(await repo.recording(liveId), isNull);
+    stats = await repo.stats(PolarDataType.hr, t0, t0 + 180000);
+    expect(stats.map((b) => b.n), [60, 60, 60]);
+    expect(stats.map((b) => b.mean), [90, 80, 90]);
+    expect((await repo.recordings(type: PolarDataType.hr)).length, 3);
+
+    // A live recording of another device is left alone.
+    final otherId = await repo.storeRecording(
+      'OTHER',
+      hrRecording(DateTime.fromMillisecondsSinceEpoch(t0), List.filled(10, 50)),
+      source: 'live',
+      sampleTsMs: List<int>.generate(10, (i) => t0 + i * 1000),
+    );
+    await repo.storeRecording(
+      '24BE2139',
+      hrRecording(DateTime.fromMillisecondsSinceEpoch(t0), List.filled(10, 50)),
+    );
+    expect((await repo.recording(otherId))!.sampleCount, 10);
+  });
+
   test('hourly buckets aggregate minutes', () async {
     final start = DateTime(2026, 11, 9, 10);
     await repo.storeRecording(

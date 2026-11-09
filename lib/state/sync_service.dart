@@ -9,6 +9,7 @@ import '../polar/polar_bridge.dart';
 import '../polar/polar_errors.dart';
 import 'app_settings.dart';
 import 'device_controller.dart';
+import 'live_hr.dart';
 import 'live_ppi.dart';
 
 enum SyncPhase {
@@ -37,7 +38,14 @@ enum SyncPhase {
 /// the system-start trigger and the configured recordings are active → start a
 /// live HR stream → retention.
 class SyncService extends ChangeNotifier {
-  SyncService(this.bridge, this.dc, this.repo, this.settings, this.livePpi) {
+  SyncService(
+    this.bridge,
+    this.dc,
+    this.repo,
+    this.settings,
+    this.livePpi,
+    this.liveHr,
+  ) {
     _events = bridge.events.listen(_onEvent);
     dc.addListener(_onDeviceChanged);
   }
@@ -50,6 +58,7 @@ class SyncService extends ChangeNotifier {
   /// Owns PPI while the app is open: the sync must not arm the sensor's PPI
   /// recording then, and hands over to it after each run.
   final LivePpiService livePpi;
+  final LiveHrService liveHr;
   late final StreamSubscription<PolarEvent> _events;
 
   SyncPhase phase = SyncPhase.idle;
@@ -57,9 +66,13 @@ class SyncService extends ChangeNotifier {
   int? progressPercent;
   DateTime? lastSyncAt;
 
-  /// Tells viewers that stored data changed outside a sync (rebuild, delete).
+  /// Bumped whenever stored data changed: after a sync, a live flush, a
+  /// rebuild or a delete. Viewers key their queries on it.
+  int dataVersion = 0;
+
+  /// Tells viewers that stored data changed outside a sync.
   void dataChanged() {
-    lastSyncAt = DateTime.now();
+    dataVersion++;
     notifyListeners();
   }
 
@@ -192,6 +205,7 @@ class SyncService extends ChangeNotifier {
     try {
       await _run(id);
       lastSyncAt = DateTime.now();
+      dataVersion++;
       _setPhase(
         SyncPhase.done,
         '$lastRunRecordings recording${lastRunRecordings == 1 ? '' : 's'}, $lastRunSamples samples',
@@ -269,6 +283,11 @@ class SyncService extends ChangeNotifier {
       }
       _setPhase(SyncPhase.storing, 'Storing $label');
       final recId = await repo.storeRecording(id, data, path: e.path);
+      if (data.type == PolarDataType.hr) {
+        // The sensor's copy of these seconds is in; the live copy yields.
+        final stored = await repo.recording(recId);
+        if (stored != null) liveHr.covered(stored.startMs, stored.endMs);
+      }
       lastRunRecordings++;
       lastRunSamples += data.sampleCount;
       _log('info', 'stored #$recId $label: ${data.sampleCount} samples');

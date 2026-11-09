@@ -49,7 +49,7 @@ class _TablePageState extends State<TablePage> {
             ),
             Expanded(
               child: FutureBuilder<List<RecordingRow>>(
-                key: ValueKey((_filter, appController.sync.lastSyncAt)),
+                key: ValueKey((_filter, appController.sync.dataVersion)),
                 future: repo.recordings(type: _filter, limit: 500),
                 builder: (context, snap) {
                   final rows = snap.data;

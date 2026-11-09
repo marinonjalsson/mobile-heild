@@ -37,7 +37,10 @@ Two milestones are in:
 - Storage on the phone: raw HR/PPI rows, per-minute compressed ACC chunks, and per-minute stats
   (mean/min/max, RMSSD for PPI, movement = std |a| for ACC) that feed the graphs. Graphs cover
   1 h / 6 h / day / week / month windows; a two-finger pinch zooms the time axis further (one finger
-  scrolls the page), and the time labels tighten as you zoom. Recordings older
+  scrolls the page), and the time labels tighten as you zoom. The graphs are live: while the app
+  is connected, the heart rate and (in the foreground) the PP intervals streamed to the phone are
+  stored once a minute, so the charts show the last minutes before any sync. The sensor's own HR
+  recording replaces the live copy of the same seconds when it is fetched. Recordings older
   than 30 days (configurable) are deleted **only once marked as sent to mon**; until MQTT export
   exists, the mark is a manual toggle on each recording.
 

@@ -175,6 +175,9 @@ class LivePpiService extends ChangeNotifier {
   /// The sync service is mid-run; starting a stream then would race it.
   bool Function() syncBusy = () => false;
 
+  /// Called after each successful flush (the viewers re-read).
+  void Function() dataChanged = () {};
+
   PpiSession? session;
   DateTime? streamStartedAt;
   String? lastError;
@@ -334,6 +337,7 @@ class LivePpiService extends ChangeNotifier {
     if (s == null || packed == null) return;
     try {
       await repo.storeRecording(s.deviceId, packed, source: 'live');
+      dataChanged();
     } catch (e) {
       _log('warn', 'store live PP intervals: $e');
     }

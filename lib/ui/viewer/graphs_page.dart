@@ -183,7 +183,7 @@ class _GraphsPageState extends State<GraphsPage> {
                 _type,
                 fromMs,
                 toMs,
-                appController.sync.lastSyncAt,
+                appController.sync.dataVersion,
               )),
               future: appController.repo.stats(
                 _type,

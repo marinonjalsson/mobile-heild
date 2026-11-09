@@ -7,6 +7,7 @@ import '../data/repository.dart';
 import '../polar/models.dart';
 import 'app_settings.dart';
 import 'device_controller.dart';
+import 'live_hr.dart';
 import 'live_ppi.dart';
 import 'sync_service.dart';
 
@@ -21,6 +22,7 @@ class AppController extends ChangeNotifier {
   late final Repository repo;
   late final AppSettings settings;
   late final LivePpiService livePpi;
+  late final LiveHrService liveHr;
   late final SyncService sync;
   AppLifecycleListener? _lifecycle;
 
@@ -39,8 +41,11 @@ class AppController extends ChangeNotifier {
       await repo.log('info', 'rebuilt statistics for $n minutes');
     }
     livePpi = LivePpiService(device.bridge, device, repo, settings);
-    sync = SyncService(device.bridge, device, repo, settings, livePpi);
+    liveHr = LiveHrService(device, repo);
+    sync = SyncService(device.bridge, device, repo, settings, livePpi, liveHr);
     livePpi.syncBusy = () => sync.isRunning;
+    livePpi.dataChanged = sync.dataChanged;
+    liveHr.dataChanged = sync.dataChanged;
     settings.addListener(notifyListeners);
     sync.addListener(notifyListeners);
     livePpi.addListener(notifyListeners);
@@ -92,6 +97,7 @@ class AppController extends ChangeNotifier {
   void dispose() {
     _lifecycle?.dispose();
     livePpi.dispose();
+    liveHr.dispose();
     sync.dispose();
     super.dispose();
   }

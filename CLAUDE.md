@@ -13,7 +13,7 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - `lib/data/` — SQLite: `db.dart` (schema), `repository.dart` (ingest, minute stats, queries, retention),
   `polar_time.dart` (Polar ns since 2000 → Unix ms, HR/PPI timestamp derivation), `acc_codec.dart` (zlib int16 chunks).
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
-  `sync_service.dart` (the sync state machine), `app_controller.dart` (owns db/settings/sync; global `appController` in `main.dart`).
+  `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `app_controller.dart` (owns db/settings/sync; global `appController` in `main.dart`).
 - `lib/ui/` — `home_page.dart` (Dashboard / Graphs / Table / Settings), `viewer/` (dashboard, graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
   with `FlTransformationConfig`, two-finger only so the list keeps scrolling; `graphs_page.dart` ranges 1 h/6 h/day/week/month,
   table + recording detail), `settings/` (settings, device settings), and the milestone-1 control panel:
@@ -59,6 +59,13 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
   `SyncService._ensureRecording` skips PPI while `livePpi.holdsPpi`; `_afterRun` calls `livePpi.reconcile()`. The dashboard's
   pulse state (good/poor/lost) comes from `blockerBit` + `errorEstimate ≤ 30 ms`, never from skin contact (unreliable on this
   sensor). Live HR samples carry nothing but the number, so without PPI the card falls back to "same value for 60 s = held".
+- Live HR (`lib/state/live_hr.dart`): `LiveHrService` stamps every live HR sample on arrival and stores the session as a
+  `source = 'live'` HR recording (flush every 60 s, `sampleTsMs` + `replaceId` on `storeRecording`). The sensor records HR
+  at the same time, so when the sync stores an offline HR recording the repository drops live rows inside its span
+  (`_trimLiveHr`, last sample covers its full second) and `SyncService` calls `liveHr.covered(start, end)` so the in-memory
+  session forgets them too. Offline always wins; live only fills the time since the last sync.
+- Viewers key their queries on `SyncService.dataVersion`, bumped after a sync, a live flush (HR and PPI), a rebuild or a
+  delete; `lastSyncAt` is only for display.
 - `minute_stats` is a pure function of the raw rows (`_recomputeMinutes`); schema upgrades that change a statistic set
   `HeildDb.statsRebuildKey` and the app controller rebuilds at start.
 
