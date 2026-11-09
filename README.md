@@ -28,3 +28,21 @@ Android 13+ (Polar SDK 8.x), Flutter ≥ 3.44, JDK 21. iOS is not set up yet.
 flutter pub get
 flutter run -d <device-serial>
 ```
+
+## Verified on hardware (2026-11-09)
+
+Polar Verity Sense 24BE2139, firmware 3.0.16, Samsung SM-S911B (Android API 37):
+scan/connect, all live streams (HR, PPI, PPG, ACC, Gyro, Mag), SDK mode on/off,
+time set/read, disk space, LED config, offline ACC recording round trip
+(record → list → fetch → delete), trigger read, firmware check, file list,
+device-log export, D2H notifications, cached values.
+
+Known device behaviour:
+
+- A type that is live-streaming cannot be started as an offline recording
+  (`ERROR_ALREADY_IN_STATE`); stop the live stream first.
+- In SDK mode, ACC at 416 Hz made the sensor go silent and reboot after ~7 s
+  (BLE `CONNECTION_TIMEOUT`); SDK mode is cleared by the reboot. 208 Hz works.
+- Telemetry (Memfault MDS) is reported unavailable; `getLogConfig` fails with
+  `NO_SUCH_FILE_OR_DIRECTORY` until the device has a log config file.
+- Firmware update, factory reset, hibernate and warehouse sleep were not run.
