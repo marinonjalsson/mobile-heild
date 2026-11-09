@@ -38,9 +38,22 @@ void main() {
 
   test('PPI timestamps prefer non-zero device stamps', () {
     final ns = 724060800000000000;
-    final ts = ppiTimestamps(0, [800, 800], [ns, 0], zoneOffsetFor: utc);
+    final startMs = ns ~/ 1000000 + polarEpochUnixMs - 5000;
+    final ts = ppiTimestamps(startMs, [800, 800], [ns, 0], zoneOffsetFor: utc);
     expect(ts[0], ns ~/ 1000000 + polarEpochUnixMs);
     expect(ts[1], ts[0] + 800);
+  });
+
+  test('PPI timestamps ignore device stamps far from the start', () {
+    // Seen on a Verity Sense: stamps count up correctly but start in 2000.
+    final base = 18014355630 * 1000000; // ns since 2000 → July 2000
+    final ts = ppiTimestamps(
+      1794235646000,
+      [405, 1165],
+      [base + 405 * 1000000, base + 1570 * 1000000],
+      zoneOffsetFor: utc,
+    );
+    expect(ts, [1794235646405, 1794235647570]);
   });
 
   test('minuteFloor', () {

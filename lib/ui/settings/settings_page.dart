@@ -166,7 +166,23 @@ class _StorageSectionState extends State<_StorageSection> {
   @override
   void initState() {
     super.initState();
+    appController.sync.addListener(_onSync);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    appController.sync.removeListener(_onSync);
+    super.dispose();
+  }
+
+  DateTime? _seenSync;
+  void _onSync() {
+    // Recount after each finished sync; other notifications are progress.
+    if (appController.sync.lastSyncAt != _seenSync) {
+      _seenSync = appController.sync.lastSyncAt;
+      _refresh();
+    }
   }
 
   Future<void> _refresh() async {

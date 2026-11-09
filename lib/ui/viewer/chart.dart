@@ -160,10 +160,17 @@ class StatChart extends StatelessWidget {
               sideTitles: SideTitles(
                 showTitles: true,
                 reservedSize: 44,
-                getTitlesWidget: (v, meta) => SideTitleWidget(
-                  meta: meta,
-                  child: Text(_num(v), style: textStyle),
-                ),
+                getTitlesWidget: (v, meta) {
+                  // The chart edges are padded values; they collide with the
+                  // nearest round label, so leave them out.
+                  if (v == meta.min || v == meta.max) {
+                    return const SizedBox.shrink();
+                  }
+                  return SideTitleWidget(
+                    meta: meta,
+                    child: Text(_num(v), style: textStyle),
+                  );
+                },
               ),
             ),
             bottomTitles: AxisTitles(

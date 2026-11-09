@@ -62,6 +62,8 @@ class SyncService extends ChangeNotifier {
   bool _syncOnReady = false;
   Timer? _rotation;
   Timer? _idle;
+  DateTime? _lastAppeared;
+  DateTime? _lastDisappeared;
 
   static const _needed = {
     'FEATURE_POLAR_OFFLINE_RECORDING',
@@ -83,6 +85,14 @@ class SyncService extends ChangeNotifier {
   void _onEvent(PolarEvent e) {
     switch (e.type) {
       case 'companionDeviceAppeared':
+        // The SDK registers one presence listener per connection, so a single
+        // event arrives several times; act on it once.
+        final now = DateTime.now();
+        if (_lastAppeared != null &&
+            now.difference(_lastAppeared!) < const Duration(seconds: 15)) {
+          return;
+        }
+        _lastAppeared = now;
         _log('info', 'sensor in range (${e.identifier})');
         if (settings.autoSync && _matchesPaired(e.identifier)) {
           unawaited(connectAndSync(reason: 'sensor appeared'));
@@ -91,6 +101,12 @@ class SyncService extends ChangeNotifier {
           unawaited(bridge.serviceIdle());
         }
       case 'companionDeviceDisappeared':
+        final now = DateTime.now();
+        if (_lastDisappeared != null &&
+            now.difference(_lastDisappeared!) < const Duration(seconds: 15)) {
+          return;
+        }
+        _lastDisappeared = now;
         _log('info', 'sensor out of range (${e.identifier})');
         _scheduleIdleCheck();
     }
@@ -274,12 +290,15 @@ class SyncService extends ChangeNotifier {
     final wanted = settings.accSetting();
     try {
       final options = await bridge.requestOfflineRecordingSettings(id, type);
-      // Snap to what the sensor offers so start never fails on a bad value.
+      // The device wants every setting type it offers (CHANNELS included), so
+      // start from its option list and snap our preferences onto it.
       final picked = <SettingType, int>{};
-      for (final e in wanted.values.entries) {
-        final avail = options.options[e.key];
-        if (avail == null || avail.isEmpty) continue;
-        picked[e.key] = avail.contains(e.value) ? e.value : avail.first;
+      for (final e in options.options.entries) {
+        if (e.value.isEmpty) continue;
+        final want = wanted.values[e.key];
+        picked[e.key] = want != null && e.value.contains(want)
+            ? want
+            : e.value.first;
       }
       return picked.isEmpty ? wanted : SensorSetting(picked);
     } on PolarException catch (e) {

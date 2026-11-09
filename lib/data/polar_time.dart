@@ -35,9 +35,14 @@ List<int> hrTimestamps(int startMs, int count) =>
 
 /// Timestamps of a PPI recording.
 ///
-/// Uses the device stamps when present (non-zero), otherwise accumulates the
-/// intervals from the recording start: each sample ends `ppi` ms after the
-/// previous one.
+/// Uses the device stamps when present (non-zero) and plausible, otherwise
+/// accumulates the intervals from the recording start: each sample ends `ppi`
+/// ms after the previous one.
+///
+/// Plausible means the first non-zero stamp converts to within
+/// [ppiStampWindow] of [startMs]. Offline PPI recordings from the Verity Sense
+/// (FW 3.0.16) carry stamps that count up correctly but start from a base in
+/// the year 2000, so they are ignored as a whole.
 List<int> ppiTimestamps(
   int startMs,
   List<int> ppiMs,
@@ -45,9 +50,16 @@ List<int> ppiTimestamps(
   Duration Function(int unixMs)? zoneOffsetFor,
 }) {
   final out = List<int>.filled(ppiMs.length, 0);
+  var useDevice = false;
+  for (final ns in deviceNs) {
+    if (ns <= 0) continue;
+    final ms = polarNsToUnixMs(ns, zoneOffsetFor: zoneOffsetFor);
+    useDevice = (ms - startMs).abs() <= ppiStampWindow.inMilliseconds;
+    break;
+  }
   var t = startMs;
   for (var i = 0; i < ppiMs.length; i++) {
-    final ns = i < deviceNs.length ? deviceNs[i] : 0;
+    final ns = useDevice && i < deviceNs.length ? deviceNs[i] : 0;
     if (ns > 0) {
       t = polarNsToUnixMs(ns, zoneOffsetFor: zoneOffsetFor);
     } else {
@@ -57,6 +69,10 @@ List<int> ppiTimestamps(
   }
   return out;
 }
+
+/// How far the first PPI device stamp may lie from the recording start before
+/// all device stamps are treated as garbage.
+const ppiStampWindow = Duration(days: 2);
 
 /// Start of the minute containing [unixMs].
 int minuteFloor(int unixMs) => unixMs - unixMs % 60000;

@@ -195,19 +195,21 @@ class _ScanPageState extends State<ScanPage> {
                                 '"Use" pairs it for automatic sync; "Connect" opens the control panel.',
                     ),
                   for (final d in _found.values)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.watch),
-                      title: Text(d.name),
-                      subtitle: Text(
-                        '${d.deviceId} · ${d.address} · ${d.rssi} dBm',
-                      ),
-                      trailing: Wrap(
-                        spacing: 4,
-                        children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.watch),
+                          title: Text(d.name),
+                          subtitle: Text(
+                            '${d.deviceId} · ${d.address} · ${d.rssi} dBm',
+                          ),
+                        ),
+                        ButtonRow([
                           FilledButton(
                             onPressed: d.isConnectable ? () => _use(d) : null,
-                            child: const Text('Use'),
+                            child: const Text('Use as my sensor'),
                           ),
                           FilledButton.tonal(
                             onPressed: d.isConnectable
@@ -215,8 +217,9 @@ class _ScanPageState extends State<ScanPage> {
                                 : null,
                             child: const Text('Connect'),
                           ),
-                        ],
-                      ),
+                        ]),
+                        const SizedBox(height: 8),
+                      ],
                     ),
                 ],
               ),
