@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import 'models.dart';
+import 'packed_recording.dart';
 import 'polar_errors.dart';
 
 /// Dart side of the Polar BLE SDK bridge.
@@ -124,6 +125,39 @@ class PolarBridge {
     'identifier': identifier,
   });
 
+  // ---- app service & companion device (heild's own Kotlin, not SDK) ---------
+
+  /// Starts (or keeps) the connectedDevice foreground service so the Dart side
+  /// survives the Activity going away. Idempotent.
+  Future<void> serviceStart() => _call<void>('serviceStart');
+
+  /// Tells the foreground service nothing is pending; it stops itself.
+  Future<void> serviceIdle() => _call<void>('serviceIdle');
+
+  Future<void> serviceNotification(String title, String text) =>
+      _call<void>('serviceNotification', {'title': title, 'text': text});
+
+  /// BT addresses the Companion Device Manager has associated with this app.
+  Future<List<String>> companionAssociatedAddresses() =>
+      _callStrings('companionAssociatedAddresses');
+
+  Future<bool> companionIsAssociated(String identifier) async =>
+      (await _call<bool>('companionIsAssociated', {'identifier': identifier}))!;
+
+  Future<void> companionRemove(String identifier) =>
+      _call<void>('companionRemove', {'identifier': identifier});
+
+  /// Opens the system dialog that lets the app run in the background as a
+  /// companion app. Needs the Activity; false when none is attached.
+  Future<bool> companionRequestBackgroundPrivilege() async =>
+      (await _call<bool>('companionRequestBackgroundPrivilege')) ?? false;
+
+  Future<bool> isIgnoringBatteryOptimizations() async =>
+      (await _call<bool>('isIgnoringBatteryOptimizations')) ?? false;
+
+  Future<void> requestIgnoreBatteryOptimizations() =>
+      _call<void>('requestIgnoreBatteryOptimizations');
+
   // ---- online streaming -----------------------------------------------------
 
   Future<List<PolarDataType>> availableOnlineStreamDataTypes(
@@ -243,6 +277,18 @@ class PolarBridge {
     'entry': entry.toMap(),
     'secret': secretHex,
   }, (e) => OfflineFetchEvent.fromMap(e as Map<Object?, Object?>));
+
+  /// Like [fetchOfflineRecording] but the completion carries every sample as
+  /// typed arrays, suitable for storing (see [PackedRecording]).
+  Stream<PackedFetchEvent> fetchOfflineRecordingPacked(
+    String identifier,
+    OfflineRecordingEntry entry, {
+    String? secretHex,
+  }) => _openStream('offlineRecordPacked', {
+    'identifier': identifier,
+    'entry': entry.toMap(),
+    'secret': secretHex,
+  }, (e) => PackedFetchEvent.fromMap(e as Map<Object?, Object?>));
 
   Future<void> removeOfflineRecord(
     String identifier,

@@ -109,6 +109,20 @@ class _ScanPageState extends State<ScanPage> {
     }
   }
 
+  /// Makes [d] the sensor heild wears and syncs with automatically.
+  Future<void> _use(PolarDeviceInfo d) async {
+    if (!await _ensurePermissions()) return;
+    await _scan?.cancel();
+    if (!mounted) return;
+    setState(() => _scan = null);
+    final ok = await runAction(
+      context,
+      () => appController.pair(d),
+      success: 'Paired ${d.name}. Accept the Android dialog if it appears.',
+    );
+    if (ok && mounted) Navigator.of(context).pop();
+  }
+
   Future<void> _connectById() async {
     final id = await promptText(
       context,
@@ -125,7 +139,7 @@ class _ScanPageState extends State<ScanPage> {
     final scanning = _scan != null;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('heild'),
+        title: const Text('Sensors'),
         actions: [
           IconButton(
             tooltip: 'Connect by ID',
@@ -177,7 +191,8 @@ class _ScanPageState extends State<ScanPage> {
                     Text(
                       scanning
                           ? 'Searching for Polar devices…'
-                          : 'No devices yet. Wake the sensor and scan.',
+                          : 'No devices yet. Wake the sensor and scan. '
+                                '"Use" pairs it for automatic sync; "Connect" opens the control panel.',
                     ),
                   for (final d in _found.values)
                     ListTile(
@@ -187,11 +202,20 @@ class _ScanPageState extends State<ScanPage> {
                       subtitle: Text(
                         '${d.deviceId} · ${d.address} · ${d.rssi} dBm',
                       ),
-                      trailing: FilledButton.tonal(
-                        onPressed: d.isConnectable
-                            ? () => _connect(d.deviceId)
-                            : null,
-                        child: const Text('Connect'),
+                      trailing: Wrap(
+                        spacing: 4,
+                        children: [
+                          FilledButton(
+                            onPressed: d.isConnectable ? () => _use(d) : null,
+                            child: const Text('Use'),
+                          ),
+                          FilledButton.tonal(
+                            onPressed: d.isConnectable
+                                ? () => _connect(d.deviceId)
+                                : null,
+                            child: const Text('Connect'),
+                          ),
+                        ],
                       ),
                     ),
                 ],

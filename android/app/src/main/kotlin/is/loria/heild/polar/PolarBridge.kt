@@ -3,7 +3,6 @@ package `is`.loria.heild.polar
 import android.content.Context
 import com.polar.androidcommunications.api.ble.model.gatt.client.pmd.PmdMeasurementType
 import com.polar.sdk.api.PolarBleApi
-import com.polar.sdk.api.PolarBleApi.PolarBleSdkFeature
 import com.polar.sdk.api.PolarBleApiDefaultImpl
 import com.polar.sdk.api.PolarDeviceTelemetryType
 import `is`.loria.heild.polar.Mappers.bool
@@ -13,6 +12,12 @@ import `is`.loria.heild.polar.Mappers.intOrNull
 import `is`.loria.heild.polar.Mappers.map
 import `is`.loria.heild.polar.Mappers.str
 import `is`.loria.heild.polar.Mappers.strOrNull
+import `is`.loria.heild.ActivityHolder
+import `is`.loria.heild.service.HeildService
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -31,29 +36,15 @@ import java.time.ZonedDateTime
  */
 class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
 
+    private val appContext: Context = context.applicationContext
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val events = PolarEvents(messenger)
     private val streams = StreamChannels(messenger, scope)
     private val methods = MethodChannel(messenger, "heild/polar")
 
-    private val api: PolarBleApi = PolarBleApiDefaultImpl.defaultImplementation(
-        context.applicationContext,
-        setOf(
-            PolarBleSdkFeature.FEATURE_HR,
-            PolarBleSdkFeature.FEATURE_DEVICE_INFO,
-            PolarBleSdkFeature.FEATURE_BATTERY_INFO,
-            PolarBleSdkFeature.FEATURE_POLAR_ONLINE_STREAMING,
-            PolarBleSdkFeature.FEATURE_POLAR_OFFLINE_RECORDING,
-            PolarBleSdkFeature.FEATURE_POLAR_DEVICE_TIME_SETUP,
-            PolarBleSdkFeature.FEATURE_POLAR_SDK_MODE,
-            PolarBleSdkFeature.FEATURE_POLAR_FILE_TRANSFER,
-            PolarBleSdkFeature.FEATURE_POLAR_LED_ANIMATION,
-            PolarBleSdkFeature.FEATURE_POLAR_FIRMWARE_UPDATE,
-            PolarBleSdkFeature.FEATURE_POLAR_DEVICE_CONTROL,
-            PolarBleSdkFeature.FEATURE_POLAR_FEATURES_CONFIGURATION_SERVICE,
-            PolarBleSdkFeature.FEATURE_TELEMETRY,
-        ),
-    ).also { it.setApiCallback(events) }
+    /** Process-wide SDK instance (see [PolarHolder]); this bridge only owns the channels. */
+    private val api: PolarBleApi = PolarHolder.get(context).also { it.setApiCallback(events) }
 
     init {
         methods.setMethodCallHandler(this)
@@ -62,7 +53,6 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
     fun dispose() {
         streams.closeAll()
         methods.setMethodCallHandler(null)
-        api.shutDown()
         scope.cancel()
     }
 
@@ -239,6 +229,33 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
                 api.stopTelemetry(id, PolarDeviceTelemetryType.valueOf(a.str("telemetryType")))
             }
 
+            // ---- heild service & companion device (app code, not SDK) ---------
+            "serviceStart" -> { HeildService.start(appContext); result.success(null) }
+            "serviceIdle" -> { HeildService.instance?.stop(); result.success(null) }
+            "serviceNotification" -> {
+                HeildService.instance?.updateNotification(a.str("title"), a.str("text"))
+                result.success(null)
+            }
+            "companionAssociatedAddresses" -> run(result) { api.getAssociatedDeviceAddresses() }
+            "companionIsAssociated" -> run(result) { api.isAssociated(id) }
+            "companionRemove" -> run(result) { api.removeAssociation(id) }
+            "companionRequestBackgroundPrivilege" -> {
+                val activity = ActivityHolder.current
+                result.success(activity != null && api.requestBackgroundExecutionPrivilege(activity, 8342))
+            }
+            "isIgnoringBatteryOptimizations" -> {
+                val pm = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                result.success(pm.isIgnoringBatteryOptimizations(appContext.packageName))
+            }
+            "requestIgnoreBatteryOptimizations" -> {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:${appContext.packageName}"))
+                val activity = ActivityHolder.current
+                if (activity != null) activity.startActivity(intent)
+                else appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                result.success(null)
+            }
+
             // ---- flows --------------------------------------------------------
             "openStream" -> {
                 try {
@@ -289,6 +306,11 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
                     Mappers.offlineEntryFromMap(a.map("entry")!!),
                     Mappers.secretFromHex(a.strOrNull("secret")),
                 ).map(Mappers::offlineResultToMap)
+                "offlineRecordPacked" -> api.getOfflineRecordWithProgress(
+                    id,
+                    Mappers.offlineEntryFromMap(a.map("entry")!!),
+                    Mappers.secretFromHex(a.strOrNull("secret")),
+                ).map(Mappers::offlinePackedResultToMap)
 
                 "checkFirmwareUpdate" -> api.checkFirmwareUpdate(id).map(Mappers::checkFwToMap)
                 "updateFirmware" -> {

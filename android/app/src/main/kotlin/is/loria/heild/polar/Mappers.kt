@@ -436,4 +436,86 @@ object Mappers {
         "parameters" to n.parameters,
         "parsedParameters" to n.parsedParameters?.toString(),
     )
+
+    // ---- packed offline recording (typed arrays, see lib/polar/packed_recording.dart) ----
+
+    /**
+     * Whole recording as primitive arrays: LongArray -> Int64List, IntArray -> Int32List,
+     * FloatArray -> Float32List, ByteArray -> Uint8List on the Dart side. A day of ACC is
+     * millions of samples; one Map per sample would not fit in memory on either side.
+     */
+    fun offlinePackedToMap(d: PolarOfflineRecordingData): Map<String, Any?> {
+        val out = mutableMapOf<String, Any?>(
+            "kind" to "complete",
+            "startTime" to d.startTime.toString(),
+            "settings" to sensorSettingToMap(d.settings),
+        )
+        when (d) {
+            is PolarOfflineRecordingData.AccOfflineRecording -> {
+                val s = d.data.samples
+                out["type"] = "ACC"
+                out["sampleCount"] = s.size
+                out["ts"] = LongArray(s.size) { s[it].timeStamp }
+                out["xyz"] = IntArray(s.size * 3).also { a ->
+                    for (i in s.indices) { a[i * 3] = s[i].x; a[i * 3 + 1] = s[i].y; a[i * 3 + 2] = s[i].z }
+                }
+            }
+            is PolarOfflineRecordingData.GyroOfflineRecording -> {
+                val s = d.data.samples
+                out["type"] = "GYRO"
+                out["sampleCount"] = s.size
+                out["ts"] = LongArray(s.size) { s[it].timeStamp }
+                out["xyzF"] = FloatArray(s.size * 3).also { a ->
+                    for (i in s.indices) { a[i * 3] = s[i].x; a[i * 3 + 1] = s[i].y; a[i * 3 + 2] = s[i].z }
+                }
+            }
+            is PolarOfflineRecordingData.MagOfflineRecording -> {
+                val s = d.data.samples
+                out["type"] = "MAGNETOMETER"
+                out["sampleCount"] = s.size
+                out["ts"] = LongArray(s.size) { s[it].timeStamp }
+                out["xyzF"] = FloatArray(s.size * 3).also { a ->
+                    for (i in s.indices) { a[i * 3] = s[i].x; a[i * 3 + 1] = s[i].y; a[i * 3 + 2] = s[i].z }
+                }
+            }
+            is PolarOfflineRecordingData.HrOfflineRecording -> {
+                val s = d.data.samples
+                out["type"] = "HR"
+                out["sampleCount"] = s.size
+                out["hr"] = IntArray(s.size) { s[it].hr }
+                out["flags"] = ByteArray(s.size) {
+                    ((if (s[it].contactStatus) 1 else 0) or (if (s[it].contactStatusSupported) 2 else 0)).toByte()
+                }
+            }
+            is PolarOfflineRecordingData.PpiOfflineRecording -> {
+                val s = d.data.samples
+                out["type"] = "PPI"
+                out["sampleCount"] = s.size
+                out["ts"] = LongArray(s.size) { s[it].timeStamp.toLong() }
+                out["ppi"] = IntArray(s.size) { s[it].ppi }
+                out["errorEstimate"] = IntArray(s.size) { s[it].errorEstimate }
+                out["hr"] = IntArray(s.size) { s[it].hr }
+                out["flags"] = ByteArray(s.size) {
+                    ((if (s[it].blockerBit) 1 else 0) or
+                        (if (s[it].skinContactStatus) 2 else 0) or
+                        (if (s[it].skinContactSupported) 4 else 0)).toByte()
+                }
+            }
+            else -> {
+                out["type"] = d::class.simpleName.orEmpty()
+                out["sampleCount"] = 0
+            }
+        }
+        return out
+    }
+
+    fun offlinePackedResultToMap(r: PolarOfflineRecordingResult): Map<String, Any?> = when (r) {
+        is PolarOfflineRecordingResult.Progress -> mapOf(
+            "kind" to "progress",
+            "bytesDownloaded" to r.bytesDownloaded,
+            "totalBytes" to r.totalBytes,
+            "progressPercent" to r.progressPercent,
+        )
+        is PolarOfflineRecordingResult.Complete -> offlinePackedToMap(r.data)
+    }
 }
