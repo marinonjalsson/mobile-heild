@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../data/repository.dart';
@@ -173,50 +175,175 @@ class _SensorCard extends StatelessWidget {
   }
 }
 
-class _LiveHrCard extends StatelessWidget {
+/// The current heart rate with freshness cues: a dot that lights up when a
+/// sample lands and fades over three seconds, how long ago that was, and a
+/// weak-signal note when the value has not moved for 30 s and the sensor sends
+/// no beat intervals (what the Verity Sense does when it loses the pulse).
+class _LiveHrCard extends StatefulWidget {
   const _LiveHrCard(this.dc);
   final DeviceController dc;
 
   @override
-  Widget build(BuildContext context) {
-    final active = dc.streams[PolarDataType.hr];
+  State<_LiveHrCard> createState() => _LiveHrCardState();
+}
+
+class _LiveHrCardState extends State<_LiveHrCard>
+    with SingleTickerProviderStateMixin {
+  static const _weakAfter = Duration(seconds: 30);
+
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 3),
+  );
+  Timer? _tick;
+  int _seenBatches = -1;
+  HrSample? _seenNotification;
+  DateTime? _lastDataAt;
+  DateTime? _lastChangeAt;
+  int? _lastHr;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.dc.addListener(_onDevice);
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+    _onDevice();
+  }
+
+  @override
+  void dispose() {
+    widget.dc.removeListener(_onDevice);
+    _tick?.cancel();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  HrSample? _current() {
+    final active = widget.dc.streams[PolarDataType.hr];
     final batch = active?.latest;
-    HrSample? s;
     if (batch != null && batch.samples.isNotEmpty) {
-      s = HrSample.fromMap(batch.samples.last);
+      return HrSample.fromMap(batch.samples.last);
     }
-    s ??= dc.lastHrNotification;
+    return widget.dc.lastHrNotification;
+  }
+
+  void _onDevice() {
+    final active = widget.dc.streams[PolarDataType.hr];
+    final s = _current();
+    if (s == null) return;
+    final isNew = active != null
+        ? active.batches != _seenBatches
+        : !identical(widget.dc.lastHrNotification, _seenNotification);
+    if (!isNew) return;
+    _seenBatches = active?.batches ?? -1;
+    _seenNotification = widget.dc.lastHrNotification;
+    final now = DateTime.now();
+    _lastDataAt = now;
+    if (s.hr != _lastHr) {
+      _lastHr = s.hr;
+      _lastChangeAt = now;
+    }
+    _pulse.value = 1;
+    _pulse.animateTo(0, curve: Curves.easeOut);
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dc = widget.dc;
+    final scheme = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
+    final active = dc.streams[PolarDataType.hr];
+    final s = _current();
+    final now = DateTime.now();
+    final age = _lastDataAt == null ? null : now.difference(_lastDataAt!);
+    final unchanged = _lastChangeAt == null
+        ? null
+        : now.difference(_lastChangeAt!);
+    final hasRr = s != null && s.rrAvailable && s.rrsMs.isNotEmpty;
+    final weak =
+        s != null && unchanged != null && unchanged >= _weakAfter && !hasRr;
+    final stale = age != null && age.inSeconds >= 10;
+
     return Section(
       title: 'Live heart rate',
-      trailing: active == null
-          ? TextButton(
-              onPressed: () =>
-                  runAction(context, () => dc.startStream(PolarDataType.hr)),
-              child: const Text('Start'),
-            )
-          : TextButton(
-              onPressed: () =>
-                  runAction(context, () => dc.stopStream(PolarDataType.hr)),
-              child: const Text('Stop'),
-            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FadeTransition(
+            opacity: _pulse,
+            child: Icon(Icons.circle, size: 10, color: scheme.primary),
+          ),
+          const SizedBox(width: 12),
+          active == null
+              ? TextButton(
+                  onPressed: () => runAction(
+                    context,
+                    () => dc.startStream(PolarDataType.hr),
+                  ),
+                  child: const Text('Start'),
+                )
+              : TextButton(
+                  onPressed: () =>
+                      runAction(context, () => dc.stopStream(PolarDataType.hr)),
+                  child: const Text('Stop'),
+                ),
+        ],
+      ),
       children: [
         if (s == null)
           const Text('Waiting for the first beat…')
-        else
+        else ...[
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('${s.hr}', style: Theme.of(context).textTheme.displayMedium),
+              Text(
+                '${s.hr}',
+                style: Theme.of(context).textTheme.displayMedium
+                    ?.copyWith(color: weak || stale ? scheme.outline : null),
+              ),
               const SizedBox(width: 8),
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Text(
                   'bpm${s.contactStatusSupported ? (s.contactStatus ? ' · on skin' : ' · no contact') : ''}'
-                  '${s.rrAvailable && s.rrsMs.isNotEmpty ? ' · RR ${s.rrsMs.last} ms' : ''}',
+                  '${hasRr ? ' · RR ${s.rrsMs.last} ms' : ''}',
                 ),
               ),
             ],
           ),
+          Text(
+            age == null
+                ? 'no update yet'
+                : age.inSeconds < 2
+                ? 'updated just now'
+                : 'updated ${age.inSeconds} s ago',
+            style: small?.copyWith(color: stale ? scheme.error : null),
+          ),
+          if (weak)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.signal_cellular_nodata,
+                    size: 16,
+                    color: scheme.error,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Weak signal: value unchanged for ${unchanged.inSeconds} s '
+                      'and no beat intervals. Tighten the band or move it up the arm.',
+                      style: small?.copyWith(color: scheme.error),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ],
     );
   }
