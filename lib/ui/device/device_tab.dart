@@ -54,8 +54,9 @@ class _DeviceTabState extends State<DeviceTab>
     String word,
     Future<void> Function() op,
   ) async {
-    if (!await confirmTyped(context, title: title, body: body, word: word))
+    if (!await confirmTyped(context, title: title, body: body, word: word)) {
       return;
+    }
     if (!mounted) return;
     await _do(op, success: '$title sent');
   }
@@ -93,7 +94,10 @@ class _DeviceTabState extends State<DeviceTab>
                       : '${dc.batteryLevel}%',
                   'Charge state': dc.chargeState,
                   'RSSI': _rssi == null ? null : '$_rssi dBm',
-                  ...dc.disInfo.map((k, v) => MapEntry(_disLabel(k), v)),
+                  // The raw System ID (0x2A23) is binary; SYSTEM_ID_HEX is kept.
+                  for (final e in dc.disInfo.entries)
+                    if (!e.key.toLowerCase().startsWith('00002a23'))
+                      _disLabel(e.key): e.value,
                   'Features ready': dc.featuresReady.map(_short).join(', '),
                   'Unavailable': dc.featuresUnavailable.map(_short).join(', '),
                   if (dc.lastDisconnect != null)
@@ -402,10 +406,11 @@ class _DeviceTabState extends State<DeviceTab>
                             final ok = await dc.bridge.startSyncNotifications(
                               id,
                             );
-                            if (!ok)
+                            if (!ok) {
                               throw Exception(
                                 'device refused start-sync notification',
                               );
+                            }
                           }, success: 'Sync mode started (fast transfer)'),
                     child: const Text('Start sync'),
                   ),

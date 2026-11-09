@@ -147,8 +147,9 @@ class _OfflineTabState extends State<OfflineTab>
       barrierDismissible: false,
       builder: (ctx) {
         finished.future.then((_) {
-          if (ctx.mounted && progress.value?.data == null)
+          if (ctx.mounted && progress.value?.data == null) {
             Navigator.of(ctx).pop();
+          }
         });
         return ValueListenableBuilder<OfflineFetchEvent?>(
           valueListenable: progress,
@@ -221,8 +222,9 @@ class _OfflineTabState extends State<OfflineTab>
       context,
       title: 'Delete recording?',
       body: entry.path,
-    ))
+    )) {
       return;
+    }
     if (!mounted) return;
     final ok = await runAction(
       context,
@@ -304,6 +306,11 @@ class _OfflineTabState extends State<OfflineTab>
               children: [
                 if (!enabled)
                   const Text('Offline recording feature not ready.'),
+                Text(
+                  'A type that is live-streaming cannot be recorded at the same '
+                  'time (ERROR_ALREADY_IN_STATE). Stop the live stream first.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
                 if (_recording.isNotEmpty)
                   Text(
                     'Currently recording: ${_recording.map((t) => t.label).join(', ')}',
@@ -338,8 +345,9 @@ class _OfflineTabState extends State<OfflineTab>
                                                 t,
                                               ),
                                   );
-                                  if (s != null)
+                                  if (s != null) {
                                     setState(() => _settings[t] = s);
+                                  }
                                 },
                         ),
                       _recording.contains(t)

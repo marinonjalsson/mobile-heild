@@ -169,8 +169,9 @@ class _AdvancedTabState extends State<AdvancedTab>
       title: 'Delete on device',
       body: path,
       word: 'DELETE',
-    ))
+    )) {
       return;
+    }
     if (!mounted) return;
     final ok = await _do(
       () => dc.bridge.deleteFileOrDirectory(id, path),

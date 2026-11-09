@@ -57,8 +57,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       final prev = _selected ?? widget.initial;
       if (prev != null) {
         for (final e in prev.values.entries) {
-          if (o.options[e.key]?.contains(e.value) ?? false)
+          if (o.options[e.key]?.contains(e.value) ?? false) {
             sel = sel.copyWith(e.key, e.value);
+          }
         }
       }
       setState(() {
@@ -82,7 +83,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         16,
         16,
         16,
-        16 + MediaQuery.viewInsetsOf(context).bottom,
+        16 +
+            MediaQuery.viewInsetsOf(context).bottom +
+            MediaQuery.viewPaddingOf(context).bottom,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -131,8 +134,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       ),
                   ],
                   onChanged: (v) {
-                    if (v != null)
+                    if (v != null) {
                       setState(() => _selected = _selected!.copyWith(e.key, v));
+                    }
                   },
                 ),
               ),

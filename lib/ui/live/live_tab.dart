@@ -73,9 +73,9 @@ class _LiveTabState extends State<LiveTab> with AutomaticKeepAliveClientMixin {
     return ListenableBuilder(
       listenable: dc,
       builder: (context, _) {
-        final ready =
-            dc.featuresReady.contains('FEATURE_POLAR_ONLINE_STREAMING') ||
-            dc.featuresReady.contains('FEATURE_HR');
+        final ready = dc.featuresReady.contains(
+          'FEATURE_POLAR_ONLINE_STREAMING',
+        );
         if (ready && _types == null && !_loading && !_autoLoaded) {
           _autoLoaded = true;
           WidgetsBinding.instance.addPostFrameCallback((_) => _loadTypes());
@@ -119,6 +119,7 @@ class _LiveTabState extends State<LiveTab> with AutomaticKeepAliveClientMixin {
               _StreamCard(
                 type: type,
                 active: dc.streams[type],
+                lastError: dc.streamErrors[type],
                 settings: _settings[type],
                 enabled: dc.isConnected,
                 onStart: () => _start(type),
@@ -136,6 +137,7 @@ class _StreamCard extends StatelessWidget {
   const _StreamCard({
     required this.type,
     required this.active,
+    this.lastError,
     required this.settings,
     required this.enabled,
     required this.onStart,
@@ -145,6 +147,7 @@ class _StreamCard extends StatelessWidget {
 
   final PolarDataType type;
   final ActiveStream? active;
+  final Object? lastError;
   final SensorSetting? settings;
   final bool enabled;
   final VoidCallback onStart;
@@ -177,14 +180,19 @@ class _StreamCard extends StatelessWidget {
             settings.toString(),
             style: Theme.of(context).textTheme.bodySmall,
           ),
-        if (a == null)
+        if (a == null) ...[
           Text(
             type == PolarDataType.ppi
                 ? 'First PPI batch arrives after ~25 s. HR is then updated every 5 s.'
                 : 'Not running.',
             style: Theme.of(context).textTheme.bodySmall,
-          )
-        else ...[
+          ),
+          if (lastError != null)
+            Text(
+              '$lastError',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+        ] else ...[
           if (a.error != null)
             Text(
               '${a.error}',
@@ -211,8 +219,9 @@ class _LatestValues extends StatelessWidget {
     final batch = active.latest;
     final big = Theme.of(context).textTheme.displaySmall;
     final mono = const TextStyle(fontFamily: 'monospace');
-    if (batch == null || batch.samples.isEmpty)
+    if (batch == null || batch.samples.isEmpty) {
       return const Text('Waiting for data…');
+    }
     final last = batch.samples.last;
     switch (active.type) {
       case PolarDataType.hr:

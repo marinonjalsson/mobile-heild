@@ -70,7 +70,9 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
     private fun run(result: MethodChannel.Result, block: suspend () -> Any?) {
         scope.launch {
             try {
-                result.success(block())
+                // Unit is not encodable by the StandardMessageCodec; send null for void calls.
+                val value = block()
+                result.success(if (value == Unit) null else value)
             } catch (e: Throwable) {
                 result.error(e::class.simpleName ?: "Error", e.message ?: e.toString(), null)
             }

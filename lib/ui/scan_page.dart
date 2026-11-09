@@ -99,8 +99,8 @@ class _ScanPageState extends State<ScanPage> {
   Future<void> _connect(String id) async {
     if (!await _ensurePermissions()) return;
     await _scan?.cancel();
-    _scan = null;
     if (!mounted) return;
+    setState(() => _scan = null);
     final ok = await runAction(context, () => deviceController.connect(id));
     if (ok && mounted) {
       await Navigator.of(context)
@@ -115,8 +115,9 @@ class _ScanPageState extends State<ScanPage> {
       title: 'Polar device ID',
       hint: 'e.g. C2E1A2B3 or 00:11:22:33:44:55',
     );
-    if (id != null && id.trim().isNotEmpty)
+    if (id != null && id.trim().isNotEmpty) {
       await _connect(id.trim().toUpperCase());
+    }
   }
 
   @override

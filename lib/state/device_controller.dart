@@ -62,13 +62,21 @@ class DeviceController extends ChangeNotifier {
   bool get isConnected => connection == PolarConnectionState.connected;
 
   /// Firmware version from the Device Information Service, if received.
+  /// Polar reports the device firmware as the DIS *Software revision*
+  /// (0x2A28); *Firmware revision* (0x2A26) is the BLE stack version.
   String? get firmwareVersion {
-    for (final e in disInfo.entries) {
-      final k = e.key.toLowerCase();
-      if (k.contains('2a26') || k.contains('firmware')) return e.value;
+    String? byUuid(String uuid) {
+      for (final e in disInfo.entries) {
+        if (e.key.toLowerCase().startsWith(uuid)) return e.value;
+      }
+      return null;
     }
-    return null;
+
+    return byUuid('00002a28') ?? byUuid('00002a26');
   }
+
+  /// Last error of a stream that ended, kept until the type is started again.
+  final Map<PolarDataType, Object> streamErrors = {};
 
   void log(String line) {
     final t = DateTime.now().toIso8601String().substring(11, 19);
@@ -104,6 +112,7 @@ class DeviceController extends ChangeNotifier {
     final id = deviceId;
     if (id == null) return;
     await stopStream(type);
+    streamErrors.remove(type);
     late ActiveStream active;
     final sub = bridge
         .startStream(id, type, settings: settings)
@@ -116,6 +125,7 @@ class DeviceController extends ChangeNotifier {
           },
           onError: (Object e) {
             active.error = e;
+            streamErrors[type] = e;
             log('${type.label} stream error: $e');
             notifyListeners();
           },
@@ -210,10 +220,11 @@ class DeviceController extends ChangeNotifier {
       case 'batteryChargingStatus':
         if (forUs) chargeState = e.raw['chargeState'] as String;
       case 'hrNotification':
-        if (forUs)
+        if (forUs) {
           lastHrNotification = HrSample.fromMap(
             e.raw['sample'] as Map<Object?, Object?>,
           );
+        }
       default:
         log('${e.type}: ${e.raw}');
     }
