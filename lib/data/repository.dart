@@ -225,7 +225,7 @@ class Repository {
     final flags = r.flags ?? Uint8List(hr.length);
     final ts = hrTimestamps(startMs, hr.length);
     final batch = txn.batch();
-    final stats = _MinuteAccumulator('HR');
+    final minutes = <int>{};
     for (var i = 0; i < hr.length; i++) {
       final contact = i < flags.length && (flags[i] & 1) != 0;
       batch.insert('hr_samples', {
@@ -234,10 +234,10 @@ class Repository {
         'hr': hr[i],
         'contact': contact ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
-      if (hr[i] > 0) stats.add(ts[i], hr[i].toDouble());
+      minutes.add(minuteFloor(ts[i]));
     }
     await batch.commit(noResult: true);
-    await stats.flush(txn);
+    await _recomputeMinutes(txn, 'HR', minutes);
   }
 
   Future<void> _storePpi(
@@ -252,7 +252,7 @@ class Repository {
     final flags = r.flags ?? Uint8List(ppi.length);
     final ts = ppiTimestamps(startMs, ppi, r.ts ?? Int64List(0));
     final batch = txn.batch();
-    final stats = _MinuteAccumulator('PPI', rmssd: true);
+    final minutes = <int>{};
     var lastTs = -1;
     for (var i = 0; i < ppi.length; i++) {
       // Two samples can share a millisecond when device stamps repeat.
@@ -269,10 +269,10 @@ class Repository {
         'blocker': blocker ? 1 : 0,
         'skin_contact': (flags[i] & 2) != 0 ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
-      if (!blocker && ppi[i] > 0) stats.add(t, ppi[i].toDouble());
+      minutes.add(minuteFloor(t));
     }
     await batch.commit(noResult: true);
-    await stats.flush(txn);
+    await _recomputeMinutes(txn, 'PPI', minutes);
   }
 
   Future<void> _storeAcc(Transaction txn, int id, PackedRecording r) async {
@@ -282,7 +282,7 @@ class Repository {
     final n = ts.length;
     if (n == 0) return;
     final unix = List<int>.generate(n, (i) => polarNsToUnixMs(ts[i]));
-    final stats = _MinuteAccumulator('ACC', stddev: true);
+    final minutes = <int>{};
     final batch = txn.batch();
     var chunkStart = 0;
     var minute = minuteFloor(unix[0]);
@@ -298,27 +298,192 @@ class Repository {
           'rate_hz': rate,
           'data': encodeAccChunk(xyz, chunkStart, count),
         });
+        minutes.add(minute);
         if (i < n) {
           chunkStart = i;
           minute = minuteFloor(unix[i]);
         }
       }
-      if (i < n) {
-        final x = xyz[i * 3].toDouble();
-        final y = xyz[i * 3 + 1].toDouble();
-        final z = xyz[i * 3 + 2].toDouble();
-        stats.add(unix[i], math.sqrt(x * x + y * y + z * z));
-      }
     }
     await batch.commit(noResult: true);
-    await stats.flush(txn);
+    await _recomputeMinutes(txn, 'ACC', minutes);
   }
+
+  // ---- minute stats ---------------------------------------------------------
+
+  /// Makes `minute_stats` for [minutes] of [type] a pure function of the raw
+  /// rows, so overlapping recordings, re-stores and deletes stay exact.
+  ///
+  /// HR: samples with hr > 0 (0 = no contact). PPI: non-blocker samples;
+  /// `extra` is RMSSD over successive intervals of one recording, the sequence
+  /// breaking at blocker samples, with each difference counted in the minute
+  /// of its later sample. ACC: |a| over all samples; `extra` is its standard
+  /// deviation.
+  Future<void> _recomputeMinutes(
+    DatabaseExecutor txn,
+    String type,
+    Iterable<int> minutes,
+  ) async {
+    for (final m in minutes) {
+      final row = switch (type) {
+        'HR' => await _hrMinute(txn, m),
+        'PPI' => await _ppiMinute(txn, m),
+        'ACC' => await _accMinute(txn, m),
+        _ => null,
+      };
+      await txn.delete(
+        'minute_stats',
+        where: 'type = ? AND minute_ms = ?',
+        whereArgs: [type, m],
+      );
+      if (row != null) {
+        await txn.insert('minute_stats', {
+          'type': type,
+          'minute_ms': m,
+          ...row,
+        });
+      }
+    }
+  }
+
+  Future<Map<String, Object?>?> _hrMinute(DatabaseExecutor txn, int m) async {
+    final r = (await txn.rawQuery(
+      'SELECT COUNT(*) n, AVG(hr) mean, MIN(hr) min, MAX(hr) max '
+      'FROM hr_samples WHERE hr > 0 AND ts_ms >= ? AND ts_ms < ?',
+      [m, m + 60000],
+    )).first;
+    final n = r['n'] as int;
+    if (n == 0) return null;
+    return {
+      'n': n,
+      'mean': (r['mean'] as num).toDouble(),
+      'min': (r['min'] as num).toDouble(),
+      'max': (r['max'] as num).toDouble(),
+      'extra': null,
+    };
+  }
+
+  Future<Map<String, Object?>?> _ppiMinute(DatabaseExecutor txn, int m) async {
+    // Include the preceding minute so the first interval of this minute has
+    // its predecessor (a PP interval is well under a minute long).
+    final rows = await txn.query(
+      'ppi_samples',
+      columns: ['recording_id', 'ts_ms', 'ppi', 'blocker'],
+      where: 'ts_ms >= ? AND ts_ms < ?',
+      whereArgs: [m - 60000, m + 60000],
+      orderBy: 'recording_id, ts_ms',
+    );
+    var n = 0;
+    var sum = 0.0;
+    var min = double.infinity;
+    var max = double.negativeInfinity;
+    var diffSq = 0.0;
+    var diffs = 0;
+    int? prevRec;
+    double? prev;
+    for (final r in rows) {
+      final rec = r['recording_id'] as int;
+      if (rec != prevRec) {
+        prevRec = rec;
+        prev = null;
+      }
+      final ppi = (r['ppi'] as int).toDouble();
+      if ((r['blocker'] as int) != 0 || ppi <= 0) {
+        prev = null;
+        continue;
+      }
+      if ((r['ts_ms'] as int) >= m) {
+        n++;
+        sum += ppi;
+        if (ppi < min) min = ppi;
+        if (ppi > max) max = ppi;
+        if (prev != null) {
+          final d = ppi - prev;
+          diffSq += d * d;
+          diffs++;
+        }
+      }
+      prev = ppi;
+    }
+    if (n == 0) return null;
+    return {
+      'n': n,
+      'mean': sum / n,
+      'min': min,
+      'max': max,
+      'extra': diffs > 0 ? math.sqrt(diffSq / diffs) : null,
+    };
+  }
+
+  Future<Map<String, Object?>?> _accMinute(DatabaseExecutor txn, int m) async {
+    final chunks = await txn.query(
+      'acc_chunks',
+      columns: ['data'],
+      where: 'start_ms >= ? AND start_ms < ?',
+      whereArgs: [m, m + 60000],
+    );
+    var n = 0;
+    var sum = 0.0;
+    var sumSq = 0.0;
+    var min = double.infinity;
+    var max = double.negativeInfinity;
+    for (final c in chunks) {
+      final xyz = decodeAccChunk(c['data'] as Uint8List);
+      for (var i = 0; i + 2 < xyz.length; i += 3) {
+        final x = xyz[i].toDouble();
+        final y = xyz[i + 1].toDouble();
+        final z = xyz[i + 2].toDouble();
+        final a = math.sqrt(x * x + y * y + z * z);
+        n++;
+        sum += a;
+        sumSq += a * a;
+        if (a < min) min = a;
+        if (a > max) max = a;
+      }
+    }
+    if (n == 0) return null;
+    final mean = sum / n;
+    final v = sumSq / n - mean * mean;
+    return {
+      'n': n,
+      'mean': mean,
+      'min': min,
+      'max': max,
+      'extra': math.sqrt(v < 0 ? 0 : v),
+    };
+  }
+
+  /// Drops and recomputes every minute stat from the raw rows. Run after the
+  /// statistics definitions change. Returns the number of minutes written.
+  Future<int> rebuildMinuteStats() => db.transaction((txn) async {
+    await txn.delete('minute_stats');
+    var count = 0;
+    for (final (type, sql) in const [
+      (
+        'HR',
+        'SELECT DISTINCT (ts_ms / 60000) * 60000 m FROM hr_samples WHERE hr > 0',
+      ),
+      ('PPI', 'SELECT DISTINCT (ts_ms / 60000) * 60000 m FROM ppi_samples'),
+      ('ACC', 'SELECT DISTINCT (start_ms / 60000) * 60000 m FROM acc_chunks'),
+    ]) {
+      final minutes = [
+        for (final r in await txn.rawQuery(sql)) r['m'] as int,
+      ];
+      await _recomputeMinutes(txn, type, minutes);
+      count += minutes.length;
+    }
+    return count;
+  });
 
   // ---- queries --------------------------------------------------------------
 
   /// Aggregates of [type] between [fromMs] and [toMs], grouped into buckets of
   /// [bucketMs] (60 000 for raw minutes). Buckets are aligned to [alignMs] so
   /// a day view in local time starts at local midnight.
+  ///
+  /// Over coarser buckets `mean` is the sample-weighted mean and `extra`
+  /// (RMSSD, std |a|) the sample-weighted mean of the per-minute values, i.e.
+  /// "average short-term HRV / movement", not a pooled recomputation.
   Future<List<StatBucket>> stats(
     PolarDataType type,
     int fromMs,
@@ -479,8 +644,18 @@ class Repository {
     whereArgs: [recordingId],
   );
 
-  Future<void> deleteRecording(int recordingId) =>
-      db.delete('recordings', where: 'id = ?', whereArgs: [recordingId]);
+  /// Removes a recording and its rows, and recomputes the minutes it covered.
+  Future<void> deleteRecording(int recordingId) async {
+    final r = await recording(recordingId);
+    if (r == null) return;
+    await db.transaction((txn) async {
+      await txn.delete('recordings', where: 'id = ?', whereArgs: [r.id]);
+      final minutes = <int>[
+        for (var m = minuteFloor(r.startMs); m <= r.endMs; m += 60000) m,
+      ];
+      await _recomputeMinutes(txn, r.type.wire, minutes);
+    });
+  }
 
   /// Deletes recordings that ended more than [days] ago **and** were marked
   /// sent, then drops minute stats no recording covers any more. Returns the
@@ -547,93 +722,3 @@ class Repository {
 
 /// Accumulates per-minute statistics during ingest and merges them into
 /// `minute_stats` (weighted by sample count when a minute already exists).
-class _MinuteAccumulator {
-  _MinuteAccumulator(this.type, {this.rmssd = false, this.stddev = false});
-
-  final String type;
-  final bool rmssd;
-  final bool stddev;
-  final Map<int, _Acc> _minutes = {};
-
-  void add(int tsMs, double value) {
-    final m = minuteFloor(tsMs);
-    final a = _minutes.putIfAbsent(m, _Acc.new);
-    a.n++;
-    a.sum += value;
-    a.sumSq += value * value;
-    if (value < a.min) a.min = value;
-    if (value > a.max) a.max = value;
-    if (rmssd) {
-      if (a.hasPrev) {
-        final d = value - a.prev;
-        a.diffSq += d * d;
-        a.diffs++;
-      }
-      a.prev = value;
-      a.hasPrev = true;
-    }
-  }
-
-  Future<void> flush(Transaction txn) async {
-    for (final e in _minutes.entries) {
-      final a = e.value;
-      final mean = a.sum / a.n;
-      double? extra;
-      if (rmssd) {
-        extra = a.diffs > 0 ? math.sqrt(a.diffSq / a.diffs) : null;
-      } else if (stddev) {
-        final v = a.sumSq / a.n - mean * mean;
-        extra = math.sqrt(v < 0 ? 0 : v);
-      }
-      final existing = await txn.query(
-        'minute_stats',
-        where: 'type = ? AND minute_ms = ?',
-        whereArgs: [type, e.key],
-      );
-      if (existing.isEmpty) {
-        await txn.insert('minute_stats', {
-          'type': type,
-          'minute_ms': e.key,
-          'n': a.n,
-          'mean': mean,
-          'min': a.min,
-          'max': a.max,
-          'extra': extra,
-        });
-      } else {
-        final o = existing.first;
-        final on = o['n'] as int;
-        final total = on + a.n;
-        final oExtra = (o['extra'] as num?)?.toDouble();
-        await txn.update(
-          'minute_stats',
-          {
-            'n': total,
-            'mean': ((o['mean'] as num).toDouble() * on + mean * a.n) / total,
-            'min': math.min((o['min'] as num).toDouble(), a.min),
-            'max': math.max((o['max'] as num).toDouble(), a.max),
-            'extra': extra == null
-                ? oExtra
-                : oExtra == null
-                ? extra
-                : (oExtra * on + extra * a.n) / total,
-          },
-          where: 'type = ? AND minute_ms = ?',
-          whereArgs: [type, e.key],
-        );
-      }
-    }
-  }
-}
-
-class _Acc {
-  int n = 0;
-  double sum = 0;
-  double sumSq = 0;
-  double min = double.infinity;
-  double max = double.negativeInfinity;
-  double prev = 0;
-  bool hasPrev = false;
-  double diffSq = 0;
-  int diffs = 0;
-}

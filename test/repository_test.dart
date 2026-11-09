@@ -24,7 +24,11 @@ PackedRecording hrRecording(DateTime start, List<int> hr) => PackedRecording(
   flags: Uint8List.fromList(List.filled(hr.length, 1)),
 );
 
-PackedRecording ppiRecording(DateTime start, List<int> ppi) => PackedRecording(
+PackedRecording ppiRecording(
+  DateTime start,
+  List<int> ppi, {
+  List<int> blockers = const [],
+}) => PackedRecording(
   type: PolarDataType.ppi,
   startTimeIso: start.toIso8601String(),
   settings: null,
@@ -33,10 +37,17 @@ PackedRecording ppiRecording(DateTime start, List<int> ppi) => PackedRecording(
   ppi: Int32List.fromList(ppi),
   errorEstimate: Int32List(ppi.length),
   hr: Int32List.fromList(List.filled(ppi.length, 60)),
-  flags: Uint8List(ppi.length),
+  flags: Uint8List.fromList([
+    for (var i = 0; i < ppi.length; i++) blockers.contains(i) ? 1 : 0,
+  ]),
 );
 
-PackedRecording accRecording(DateTime start, int seconds, int rateHz) {
+PackedRecording accRecording(
+  DateTime start,
+  int seconds,
+  int rateHz, {
+  int base = 1000,
+}) {
   final n = seconds * rateHz;
   final ts = Int64List(n);
   final xyz = Int32List(n * 3);
@@ -45,7 +56,7 @@ PackedRecording accRecording(DateTime start, int seconds, int rateHz) {
     ts[i] = startNs + i * (1000000000 ~/ rateHz);
     xyz[i * 3] = 0;
     xyz[i * 3 + 1] = 0;
-    xyz[i * 3 + 2] = 1000 + (i % 2 == 0 ? 10 : -10);
+    xyz[i * 3 + 2] = base + (i % 2 == 0 ? 10 : -10);
   }
   return PackedRecording(
     type: PolarDataType.acc,
@@ -164,24 +175,114 @@ void main() {
     expect(stats[0].extra, closeTo(10, 1e-6));
   });
 
-  test(
-    're-storing the same recording replaces it and merges stats once',
-    () async {
-      final start = DateTime(2026, 11, 9, 10);
-      final r = hrRecording(start, List.filled(60, 70));
-      await repo.storeRecording('24BE2139', r);
-      await repo.storeRecording('24BE2139', r);
-      expect(await repo.recordingCount(), 1);
-      final stats = await repo.stats(
-        PolarDataType.hr,
-        start.millisecondsSinceEpoch,
-        start.millisecondsSinceEpoch + 60000,
-      );
-      // Stats merge is additive by design; a replaced recording keeps the
-      // first contribution, so n doubles but the mean stays correct.
-      expect(stats.single.mean, 70);
-    },
-  );
+  test('re-storing the same recording replaces it, stats stay exact', () async {
+    final start = DateTime(2026, 11, 9, 10);
+    final r = hrRecording(start, List.filled(60, 70));
+    await repo.storeRecording('24BE2139', r);
+    await repo.storeRecording('24BE2139', r);
+    expect(await repo.recordingCount(), 1);
+    final stats = await repo.stats(
+      PolarDataType.hr,
+      start.millisecondsSinceEpoch,
+      start.millisecondsSinceEpoch + 60000,
+    );
+    expect(stats.single.n, 60);
+    expect(stats.single.mean, 70);
+  });
+
+  test('PPI: blockers break the RMSSD sequence, overlaps pool', () async {
+    final start = DateTime(2026, 11, 9, 12);
+    // A: diffs 20, 20, 20 → sum of squares 1200 over 3.
+    await repo.storeRecording(
+      '24BE2139',
+      ppiRecording(start, [800, 820, 800, 820]),
+    );
+    // B, same minute: 1000, [blocked], 1000 → the blocked beat is excluded
+    // and no difference spans it.
+    await repo.storeRecording(
+      '24BE2139',
+      ppiRecording(
+        start.add(const Duration(seconds: 10)),
+        [1000, 1100, 1000],
+        blockers: [1],
+      ),
+    );
+    final stats = await repo.stats(
+      PolarDataType.ppi,
+      start.millisecondsSinceEpoch,
+      start.millisecondsSinceEpoch + 60000,
+    );
+    expect(stats.single.n, 6);
+    expect(stats.single.mean, closeTo((3240 + 2000) / 6, 1e-9));
+    expect(stats.single.extra, closeTo(20, 1e-9));
+  });
+
+  test('PPI: a difference across a minute boundary counts', () async {
+    final start = DateTime(2026, 11, 9, 12, 0, 59);
+    // Samples at :59.800, 12:01:00.600, 12:01:01.400 → both diffs are 0 but
+    // the second minute must have an RMSSD (2 diffs), not null.
+    await repo.storeRecording('24BE2139', ppiRecording(start, [800, 800, 800]));
+    final stats = await repo.stats(
+      PolarDataType.ppi,
+      start.millisecondsSinceEpoch - 59000,
+      start.millisecondsSinceEpoch + 61000,
+    );
+    expect(stats.length, 2);
+    expect(stats[0].extra, isNull);
+    expect(stats[1].n, 2);
+    expect(stats[1].extra, 0);
+  });
+
+  test('ACC: two recordings in one minute pool the deviation', () async {
+    final start = DateTime(2026, 11, 9, 8, 0, 0);
+    await repo.storeRecording('24BE2139', accRecording(start, 10, 25));
+    await repo.storeRecording(
+      '24BE2139',
+      accRecording(
+        start.add(const Duration(seconds: 20)),
+        10,
+        25,
+        base: 1100,
+      ),
+    );
+    final stats = await repo.stats(
+      PolarDataType.acc,
+      start.millisecondsSinceEpoch,
+      start.millisecondsSinceEpoch + 60000,
+    );
+    expect(stats.single.n, 500);
+    expect(stats.single.mean, closeTo(1050, 1e-6));
+    // Pooled: sqrt(10² + 50²), not the 10 a weighted mean of stds would give.
+    expect(stats.single.extra, closeTo(50.990195, 1e-5));
+  });
+
+  test('deleting a recording and rebuilding keep stats exact', () async {
+    final start = DateTime(2026, 11, 9, 10);
+    final keep = await repo.storeRecording(
+      '24BE2139',
+      hrRecording(start, List.filled(60, 70)),
+    );
+    final drop = await repo.storeRecording(
+      '24BE2139',
+      hrRecording(start.add(const Duration(seconds: 30)), List.filled(60, 90)),
+    );
+    final range = (
+      start.millisecondsSinceEpoch,
+      start.millisecondsSinceEpoch + 120000,
+    );
+    var stats = await repo.stats(PolarDataType.hr, range.$1, range.$2);
+    expect(stats.map((s) => s.n), [90, 30]);
+    await repo.deleteRecording(drop);
+    stats = await repo.stats(PolarDataType.hr, range.$1, range.$2);
+    expect(stats.single.n, 60);
+    expect(stats.single.max, 70);
+    final before = stats.single;
+    expect(await repo.rebuildMinuteStats(), 1);
+    stats = await repo.stats(PolarDataType.hr, range.$1, range.$2);
+    expect(stats.single.n, before.n);
+    expect(stats.single.mean, before.mean);
+    expect(await repo.recording(keep), isNotNull);
+  });
 
   test('hourly buckets aggregate minutes', () async {
     final start = DateTime(2026, 11, 9, 10);

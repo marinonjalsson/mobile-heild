@@ -51,6 +51,12 @@ class SyncService extends ChangeNotifier {
   String detail = '';
   int? progressPercent;
   DateTime? lastSyncAt;
+
+  /// Tells viewers that stored data changed outside a sync (rebuild, delete).
+  void dataChanged() {
+    lastSyncAt = DateTime.now();
+    notifyListeners();
+  }
   DateTime? nextRotationAt;
   String? lastError;
   DiskSpace? diskSpace;

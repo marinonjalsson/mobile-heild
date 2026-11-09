@@ -30,6 +30,11 @@ class AppController extends ChangeNotifier {
     repo = Repository(db);
     settings = AppSettings(repo);
     await settings.load();
+    if (await repo.getSetting(HeildDb.statsRebuildKey) == '1') {
+      final n = await repo.rebuildMinuteStats();
+      await repo.setSetting(HeildDb.statsRebuildKey, '0');
+      await repo.log('info', 'rebuilt statistics for $n minutes');
+    }
     sync = SyncService(device.bridge, device, repo, settings);
     settings.addListener(notifyListeners);
     sync.addListener(notifyListeners);

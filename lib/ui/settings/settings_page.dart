@@ -242,6 +242,18 @@ class _StorageSectionState extends State<_StorageSection> {
             }, success: 'Database compacted'),
             child: const Text('Compact database'),
           ),
+          OutlinedButton(
+            onPressed: () => runAction(context, () async {
+              final n = await appController.repo.rebuildMinuteStats();
+              appController.sync.dataChanged();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Recomputed $n minutes')),
+                );
+              }
+            }),
+            child: const Text('Rebuild statistics'),
+          ),
           TextButton(
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const SyncLogPage()),

@@ -9,7 +9,11 @@ class HeildDb {
   final Database db;
   final String path;
 
-  static const version = 1;
+  static const version = 2;
+
+  /// Settings key set by a schema upgrade when `minute_stats` must be rebuilt
+  /// from the raw rows (the app controller does it at start-up).
+  static const statsRebuildKey = 'stats_rebuild';
 
   static Future<HeildDb> open({DatabaseFactory? factory, String? path}) async {
     final f = factory ?? databaseFactory;
@@ -22,6 +26,16 @@ class HeildDb {
         onCreate: (db, _) async {
           for (final s in _schema) {
             await db.execute(s);
+          }
+        },
+        onUpgrade: (db, oldVersion, _) async {
+          if (oldVersion < 2) {
+            // v2: minute stats became a pure function of the raw rows
+            // (pooled merges, RMSSD breaks at blockers). Recompute them.
+            await db.insert('settings', {
+              'key': statsRebuildKey,
+              'value': '1',
+            }, conflictAlgorithm: ConflictAlgorithm.replace);
           }
         },
       ),
