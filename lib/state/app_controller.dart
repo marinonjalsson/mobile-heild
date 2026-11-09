@@ -1,12 +1,13 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import '../data/db.dart';
 import '../data/repository.dart';
 import '../polar/models.dart';
 import 'app_settings.dart';
 import 'device_controller.dart';
+import 'live_ppi.dart';
 import 'sync_service.dart';
 
 /// Owns the database, settings and the sync service. One instance per app,
@@ -19,7 +20,9 @@ class AppController extends ChangeNotifier {
   late final HeildDb db;
   late final Repository repo;
   late final AppSettings settings;
+  late final LivePpiService livePpi;
   late final SyncService sync;
+  AppLifecycleListener? _lifecycle;
 
   bool _ready = false;
   bool get isReady => _ready;
@@ -35,10 +38,20 @@ class AppController extends ChangeNotifier {
       await repo.setSetting(HeildDb.statsRebuildKey, '0');
       await repo.log('info', 'rebuilt statistics for $n minutes');
     }
-    sync = SyncService(device.bridge, device, repo, settings);
+    livePpi = LivePpiService(device.bridge, device, repo, settings);
+    sync = SyncService(device.bridge, device, repo, settings, livePpi);
+    livePpi.syncBusy = () => sync.isRunning;
     settings.addListener(notifyListeners);
     sync.addListener(notifyListeners);
+    livePpi.addListener(notifyListeners);
     device.addListener(notifyListeners);
+    // Live PP intervals only while someone is looking: the sensor cannot
+    // stream and record them at once, and an unplanned disconnect in the
+    // background would otherwise leave no PPI recording running.
+    _lifecycle = AppLifecycleListener(
+      onStateChange: (s) => livePpi.foreground = _isForeground(s),
+    );
+    livePpi.foreground = _isForeground(WidgetsBinding.instance.lifecycleState);
     _ready = true;
     notifyListeners();
     if (settings.isPaired && settings.autoSync) {
@@ -72,8 +85,13 @@ class AppController extends ChangeNotifier {
     await settings.setPaired(deviceId: null, address: null, name: null);
   }
 
+  static bool _isForeground(AppLifecycleState? s) =>
+      s == AppLifecycleState.resumed || s == AppLifecycleState.inactive;
+
   @override
   void dispose() {
+    _lifecycle?.dispose();
+    livePpi.dispose();
     sync.dispose();
     super.dispose();
   }

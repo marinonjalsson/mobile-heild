@@ -176,6 +176,19 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                     value: s.liveHr,
                     onChanged: s.setLiveHr,
                   ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Live pulse quality while the app is open',
+                    ),
+                    subtitle: const Text(
+                      'Streams PP intervals to the phone (stored here) instead of '
+                      'recording them on the sensor; the sensor records them again '
+                      'when the app goes to the background.',
+                    ),
+                    value: s.livePpi,
+                    onChanged: s.setLivePpi,
+                  ),
                 ],
               ),
               Section(

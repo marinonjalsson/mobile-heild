@@ -65,7 +65,10 @@ class _TablePageState extends State<TablePage> {
                       final r = rows[i];
                       return ListTile(
                         leading: Icon(_icon(r.type)),
-                        title: Text('${r.type.label} · ${fmtMs(r.startMs)}'),
+                        title: Text(
+                          '${r.type.label} · ${fmtMs(r.startMs)}'
+                          '${r.source == 'live' ? ' · live' : ''}',
+                        ),
                         subtitle: Text(
                           '${fmtDuration(r.duration)} · ${r.sampleCount} samples'
                           '${r.rateHz == null ? '' : ' · ${r.rateHz} Hz'}'
@@ -229,6 +232,9 @@ class _RecordingDetailPageState extends State<RecordingDetailPage> {
               'End': fmtMs(r.endMs),
               'Duration': fmtDuration(r.duration),
               'Samples': '${r.sampleCount}',
+              'Source': r.source == 'live'
+                  ? 'streamed live to the phone'
+                  : 'recorded on the sensor',
               if (r.rateHz != null) 'Rate': '${r.rateHz} Hz',
               if (r.range != null) 'Range': '±${r.range} g',
               'Sensor file': r.path ?? '—',

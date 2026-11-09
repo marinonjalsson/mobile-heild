@@ -159,6 +159,7 @@ class Repository {
     String deviceId,
     PackedRecording r, {
     String? path,
+    String source = 'offline',
     int Function()? now,
   }) async {
     final nowMs = (now ?? () => DateTime.now().millisecondsSinceEpoch)();
@@ -188,7 +189,7 @@ class Repository {
                 for (final e in r.settings!.options.entries)
                   e.key.wire: e.value,
               }),
-        'source': 'offline',
+        'source': source,
         'path': path,
         'fetched_ms': nowMs,
       });

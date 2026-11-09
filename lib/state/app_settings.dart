@@ -37,6 +37,10 @@ class AppSettings extends ChangeNotifier {
   /// Start a live HR stream after each sync for the dashboard.
   bool liveHr = true;
 
+  /// While the app is open and connected, stream PP intervals to the phone
+  /// (pulse quality on the dashboard) instead of recording them on the sensor.
+  bool livePpi = true;
+
   bool get isPaired => pairedDeviceId != null;
 
   Future<void> load() async {
@@ -59,6 +63,7 @@ class AppSettings extends ChangeNotifier {
     stayConnected =
         (await _repo.getSetting('stay_connected') ?? 'true') == 'true';
     liveHr = (await _repo.getSetting('live_hr') ?? 'true') == 'true';
+    livePpi = (await _repo.getSetting('live_ppi') ?? 'true') == 'true';
     notifyListeners();
   }
 
@@ -124,6 +129,12 @@ class AppSettings extends ChangeNotifier {
   Future<void> setLiveHr(bool v) async {
     liveHr = v;
     await _repo.setSetting('live_hr', '$v');
+    notifyListeners();
+  }
+
+  Future<void> setLivePpi(bool v) async {
+    livePpi = v;
+    await _repo.setSetting('live_ppi', '$v');
     notifyListeners();
   }
 

@@ -50,7 +50,16 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - Storage: raw rows for HR/PPI, zlib int16 chunks per minute for ACC, `minute_stats` (per type and minute: n/mean/min/max/extra;
   extra = RMSSD for PPI, std |a| for ACC) feed every graph. Retention deletes recordings older than N days **only if `sent_ms` is set**.
 - Timestamps: Polar ns since 2000-01-01 in the sensor's *local* time → `polarNsToUnixMs` subtracts the phone zone offset.
-  Offline HR has no stamps (1 Hz from start); PPI accumulates intervals when stamps are 0.
+  Offline HR has no stamps (1 Hz from start); PPI accumulates intervals when stamps are 0 (offline PPI stamps from the
+  Verity Sense start in 2000 and are ignored).
+- Live PPI (`lib/state/live_ppi.dart`): while the app is in the foreground and connected, `LivePpiService` stops the sensor's
+  PPI recording and streams PP intervals instead (the sensor cannot do both); samples are stamped on arrival and stored as a
+  `source = 'live'` recording that grows in place (flush every 60 s). Background → stream stops, PPI recording re-armed.
+  `SyncService._ensureRecording` skips PPI while `livePpi.holdsPpi`; `_afterRun` calls `livePpi.reconcile()`. The dashboard's
+  pulse state (good/poor/lost) comes from `blockerBit` + `errorEstimate ≤ 30 ms`, never from skin contact (unreliable on this
+  sensor). Live HR samples carry nothing but the number, so without PPI the card falls back to "same value for 60 s = held".
+- `minute_stats` is a pure function of the raw rows (`_recomputeMinutes`); schema upgrades that change a statistic set
+  `HeildDb.statsRebuildKey` and the app controller rebuilds at start.
 
 ## Build / run
 

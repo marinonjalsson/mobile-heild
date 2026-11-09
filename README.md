@@ -22,6 +22,16 @@ Two milestones are in:
   the running recordings, fetch and store them, delete them from the sensor, re-arm the trigger and
   start recording again. Everything is logged in Settings → Storage → Sync log. Errors are retried
   on the next sync.
+- While the app is open and connected, PP intervals are **streamed to the phone** instead of being
+  recorded on the sensor (it cannot do both). Each beat carries a quality flag, so the dashboard can
+  say "pulse found / unclear / lost" and show live HRV, and the streamed beats are stored like any
+  recording (tagged *live*). When the app goes to the background the sensor records PP intervals
+  again. Switchable in Settings → Device. Known gap: if the connection drops while the app is open,
+  PP intervals resume only at reconnect or the next power-on; heart rate and acceleration are
+  unaffected.
+- The live heart-rate number alone cannot show whether the sensor still sees your pulse: the Verity
+  Sense repeats its last value when it loses it. Without live PP intervals the dashboard treats a
+  value unchanged for 60 s as held and says so.
 - A foreground-service notification ("heild · Connected to …") is shown while the phone talks to
   the sensor; it goes away two minutes after the sensor disconnects.
 - Storage on the phone: raw HR/PPI rows, per-minute compressed ACC chunks, and per-minute stats

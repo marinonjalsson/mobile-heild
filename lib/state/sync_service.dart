@@ -9,6 +9,7 @@ import '../polar/polar_bridge.dart';
 import '../polar/polar_errors.dart';
 import 'app_settings.dart';
 import 'device_controller.dart';
+import 'live_ppi.dart';
 
 enum SyncPhase {
   idle,
@@ -36,7 +37,7 @@ enum SyncPhase {
 /// the system-start trigger and the configured recordings are active → start a
 /// live HR stream → retention.
 class SyncService extends ChangeNotifier {
-  SyncService(this.bridge, this.dc, this.repo, this.settings) {
+  SyncService(this.bridge, this.dc, this.repo, this.settings, this.livePpi) {
     _events = bridge.events.listen(_onEvent);
     dc.addListener(_onDeviceChanged);
   }
@@ -45,6 +46,10 @@ class SyncService extends ChangeNotifier {
   final DeviceController dc;
   final Repository repo;
   final AppSettings settings;
+
+  /// Owns PPI while the app is open: the sync must not arm the sensor's PPI
+  /// recording then, and hands over to it after each run.
+  final LivePpiService livePpi;
   late final StreamSubscription<PolarEvent> _events;
 
   SyncPhase phase = SyncPhase.idle;
@@ -57,6 +62,7 @@ class SyncService extends ChangeNotifier {
     lastSyncAt = DateTime.now();
     notifyListeners();
   }
+
   DateTime? nextRotationAt;
   String? lastError;
   DiskSpace? diskSpace;
@@ -364,6 +370,7 @@ class SyncService extends ChangeNotifier {
     final running = (await bridge.offlineRecordingStatus(id)).toSet();
     for (final t in settings.recordTypes) {
       if (running.contains(t)) continue;
+      if (t == PolarDataType.ppi && livePpi.holdsPpi) continue;
       try {
         await bridge.startOfflineRecording(
           id,
@@ -380,6 +387,7 @@ class SyncService extends ChangeNotifier {
   // ---- lifecycle ------------------------------------------------------------
 
   void _afterRun() {
+    unawaited(livePpi.reconcile());
     if (dc.isConnected && settings.stayConnected) {
       _rotation?.cancel();
       final d = Duration(minutes: settings.rotationMinutes);
