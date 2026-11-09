@@ -1,10 +1,38 @@
 # heild
 
-A Flutter app on the way to helping people live healthier lives. The first milestone is a
-complete control panel for the **Polar Verity Sense** optical heart rate sensor, built on the
-official [Polar BLE SDK](https://github.com/polarofficial/polar-ble-sdk) through an in-app Kotlin bridge.
+A Flutter app on the way to helping people live healthier lives, starting with the
+**Polar Verity Sense** optical heart rate sensor and the official
+[Polar BLE SDK](https://github.com/polarofficial/polar-ble-sdk) through an in-app Kotlin bridge.
 
-## What it does
+Two milestones are in:
+
+1. a complete **control panel** for the sensor (every SDK feature, under Settings → Device → Control panel);
+2. **wear it, forget it**: the sensor records on its own, the phone fetches the data whenever the
+   sensor is in range, stores it in SQLite and shows it as graphs and tables.
+
+## Wear it, forget it
+
+- Pair once (Settings → Device → Scan → *Use as my sensor*). Android's Companion Device Manager asks
+  to allow the app to access the sensor; after that the system wakes the app whenever the sensor
+  is switched on nearby, even when the app has been swiped away.
+- The sensor records **heart rate, PP intervals (HRV) and acceleration** into its own memory from
+  the moment it is switched on (offline recording, trigger on power-on). Types, ACC rate/range and
+  the sync interval are in Settings → Recording.
+- Each sync (sensor appears, app start, *Sync now*, or hourly while connected): set the clock, stop
+  the running recordings, fetch and store them, delete them from the sensor, re-arm the trigger and
+  start recording again. Everything is logged in Settings → Storage → Sync log. Errors are retried
+  on the next sync.
+- A foreground-service notification ("heild · Connected to …") is shown while the phone talks to
+  the sensor; it goes away two minutes after the sensor disconnects.
+- Storage on the phone: raw HR/PPI rows, per-minute compressed ACC chunks, and per-minute stats
+  (mean/min/max, RMSSD for PPI, movement = std |a| for ACC) that feed the graphs. Recordings older
+  than 30 days (configurable) are deleted **only once marked as sent to mon**; until MQTT export
+  exists, the mark is a manual toggle on each recording.
+
+Phone setup that helps: allow notifications when asked, and exclude heild from battery
+optimisation (Settings → Device offers both). On Samsung also add heild to *Never sleeping apps*.
+
+## Control panel (milestone 1)
 
 - **Scan** for Polar sensors, connect by tap or by device ID, listen to HR broadcasts without connecting.
 - **Live**: HR (bpm, RR intervals, contact), PPI, PPG, accelerometer, gyroscope, magnetometer — with
@@ -26,6 +54,7 @@ Android 13+ (Polar SDK 8.x), Flutter ≥ 3.44, JDK 21. iOS is not set up yet.
 
 ```sh
 flutter pub get
+flutter analyze && flutter test   # DB tests run on the host via sqflite_common_ffi
 flutter run -d <device-serial>
 ```
 
@@ -46,3 +75,14 @@ Known device behaviour:
 - Telemetry (Memfault MDS) is reported unavailable; `getLogConfig` fails with
   `NO_SUCH_FILE_OR_DIRECTORY` until the device has a log config file.
 - Firmware update, factory reset, hibernate and warehouse sleep were not run.
+
+Milestone 2 on the same hardware: companion pairing dialog, presence observation, foreground
+service start from the background ("Background started FGS: Allowed"), auto-connect on app start,
+sync round of HR + PPI + ACC (26 Hz ±8 g), dashboard / graphs / table.
+
+- Offline ACC needs the CHANNELS setting as well as rate/range/resolution, otherwise the sensor
+  answers `ERROR_INVALID_NUMBER_OF_CHANNELS` for both the recording and the trigger.
+- Offline PPI samples carry device timestamps that count correctly but start in July 2000; the app
+  ignores them and accumulates the intervals from the recording start instead.
+- The SDK registers one presence listener per connection, so each appearance is reported several
+  times; the app de-duplicates them within 15 s.
