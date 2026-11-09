@@ -69,8 +69,16 @@ class HrRow {
   HrRow(this.tsMs, this.hr, this.contact);
   final int tsMs;
   final int hr;
-  final bool contact;
+
+  /// Skin contact as reported by the sensor, or null when the recording does
+  /// not carry contact information (the Verity Sense never does).
+  final bool? contact;
 }
+
+/// Values of `hr_samples.contact`.
+const hrContactNo = 0;
+const hrContactYes = 1;
+const hrContactUnknown = 2;
 
 class PpiRow {
   PpiRow({
@@ -227,12 +235,17 @@ class Repository {
     final batch = txn.batch();
     final minutes = <int>{};
     for (var i = 0; i < hr.length; i++) {
-      final contact = i < flags.length && (flags[i] & 1) != 0;
+      final f = i < flags.length ? flags[i] : 0;
+      final supported = (f & 2) != 0;
       batch.insert('hr_samples', {
         'recording_id': id,
         'ts_ms': ts[i],
         'hr': hr[i],
-        'contact': contact ? 1 : 0,
+        'contact': !supported
+            ? hrContactUnknown
+            : (f & 1) != 0
+            ? hrContactYes
+            : hrContactNo,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
       minutes.add(minuteFloor(ts[i]));
     }
@@ -466,9 +479,7 @@ class Repository {
       ('PPI', 'SELECT DISTINCT (ts_ms / 60000) * 60000 m FROM ppi_samples'),
       ('ACC', 'SELECT DISTINCT (start_ms / 60000) * 60000 m FROM acc_chunks'),
     ]) {
-      final minutes = [
-        for (final r in await txn.rawQuery(sql)) r['m'] as int,
-      ];
+      final minutes = [for (final r in await txn.rawQuery(sql)) r['m'] as int];
       await _recomputeMinutes(txn, type, minutes);
       count += minutes.length;
     }
@@ -559,7 +570,11 @@ class Repository {
     );
     return [
       for (final m in rows)
-        HrRow(m['ts_ms'] as int, m['hr'] as int, (m['contact'] as int) != 0),
+        HrRow(m['ts_ms'] as int, m['hr'] as int, switch (m['contact'] as int) {
+          hrContactYes => true,
+          hrContactNo => false,
+          _ => null,
+        }),
     ];
   }
 

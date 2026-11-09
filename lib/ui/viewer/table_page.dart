@@ -261,7 +261,7 @@ class _RecordingDetailPageState extends State<RecordingDetailPage> {
                   case PolarDataType.hr:
                     final s = _hr[i];
                     return _row(
-                      '${fmtTimeMs(s.tsMs)}:${_sec(s.tsMs)}  ${s.hr.toString().padLeft(3)} bpm${s.contact ? '' : '  (no contact)'}',
+                      '${fmtTimeMs(s.tsMs)}:${_sec(s.tsMs)}  ${s.hr.toString().padLeft(3)} bpm${s.contact == false ? '  (no contact)' : ''}',
                       mono,
                     );
                   case PolarDataType.ppi:

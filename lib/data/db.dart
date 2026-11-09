@@ -9,7 +9,7 @@ class HeildDb {
   final Database db;
   final String path;
 
-  static const version = 2;
+  static const version = 3;
 
   /// Settings key set by a schema upgrade when `minute_stats` must be rebuilt
   /// from the raw rows (the app controller does it at start-up).
@@ -36,6 +36,13 @@ class HeildDb {
               'key': statsRebuildKey,
               'value': '1',
             }, conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+          if (oldVersion < 3) {
+            // v3: contact became tri-state (0 no, 1 yes, 2 not reported).
+            // Every row so far came from a sensor that reports nothing.
+            await db.execute(
+              'UPDATE hr_samples SET contact = 2 WHERE contact = 0',
+            );
           }
         },
       ),

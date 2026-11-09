@@ -15,13 +15,17 @@ int polarNs(DateTime local) {
   return (ms - polarEpochUnixMs) * 1000000;
 }
 
-PackedRecording hrRecording(DateTime start, List<int> hr) => PackedRecording(
+PackedRecording hrRecording(
+  DateTime start,
+  List<int> hr, {
+  int flags = 3, // contact supported + on skin
+}) => PackedRecording(
   type: PolarDataType.hr,
   startTimeIso: start.toIso8601String(),
   settings: null,
   sampleCount: hr.length,
   hr: Int32List.fromList(hr),
-  flags: Uint8List.fromList(List.filled(hr.length, 1)),
+  flags: Uint8List.fromList(List.filled(hr.length, flags)),
 );
 
 PackedRecording ppiRecording(
@@ -108,6 +112,18 @@ void main() {
     final rows = await repo.hrRows(id, limit: 3);
     expect(rows.map((r) => r.hr), [60, 61, 62]);
     expect(rows.first.contact, isTrue);
+
+    // A sensor that reports no contact information (Verity Sense) → null.
+    final id2 = await repo.storeRecording(
+      '24BE2139',
+      hrRecording(start.add(const Duration(hours: 1)), [60], flags: 0),
+    );
+    expect((await repo.hrRows(id2)).single.contact, isNull);
+    final id3 = await repo.storeRecording(
+      '24BE2139',
+      hrRecording(start.add(const Duration(hours: 2)), [60], flags: 2),
+    );
+    expect((await repo.hrRows(id3)).single.contact, isFalse);
 
     final stats = await repo.stats(
       PolarDataType.hr,
@@ -238,12 +254,7 @@ void main() {
     await repo.storeRecording('24BE2139', accRecording(start, 10, 25));
     await repo.storeRecording(
       '24BE2139',
-      accRecording(
-        start.add(const Duration(seconds: 20)),
-        10,
-        25,
-        base: 1100,
-      ),
+      accRecording(start.add(const Duration(seconds: 20)), 10, 25, base: 1100),
     );
     final stats = await repo.stats(
       PolarDataType.acc,
