@@ -14,7 +14,8 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
   `polar_time.dart` (Polar ns since 2000 → Unix ms, HR/PPI timestamp derivation), `acc_codec.dart` (zlib int16 chunks).
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
   `sync_service.dart` (the sync state machine), `app_controller.dart` (owns db/settings/sync; global `appController` in `main.dart`).
-- `lib/ui/` — `home_page.dart` (Dashboard / Graphs / Table / Settings), `viewer/` (dashboard, graphs via fl_chart `chart.dart`,
+- `lib/ui/` — `home_page.dart` (Dashboard / Graphs / Table / Settings), `viewer/` (dashboard, graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
+  with `FlTransformationConfig`, two-finger only so the list keeps scrolling; `graphs_page.dart` ranges 1 h/6 h/day/week/month,
   table + recording detail), `settings/` (settings, device settings), and the milestone-1 control panel:
   `scan_page.dart`, `device_page.dart` (tabs Live / Offline / Device / Advanced / Log), `widgets/common.dart`.
 - `android/app/src/main/kotlin/is/loria/heild/`:

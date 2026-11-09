@@ -35,7 +35,9 @@ Two milestones are in:
 - A foreground-service notification ("heild · Connected to …") is shown while the phone talks to
   the sensor; it goes away two minutes after the sensor disconnects.
 - Storage on the phone: raw HR/PPI rows, per-minute compressed ACC chunks, and per-minute stats
-  (mean/min/max, RMSSD for PPI, movement = std |a| for ACC) that feed the graphs. Recordings older
+  (mean/min/max, RMSSD for PPI, movement = std |a| for ACC) that feed the graphs. Graphs cover
+  1 h / 6 h / day / week / month windows; a two-finger pinch zooms the time axis further (one finger
+  scrolls the page), and the time labels tighten as you zoom. Recordings older
   than 30 days (configurable) are deleted **only once marked as sent to mon**; until MQTT export
   exists, the mark is a manual toggle on each recording.
 

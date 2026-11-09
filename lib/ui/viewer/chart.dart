@@ -16,9 +16,39 @@ double? statValue(StatBucket b, StatField f) => switch (f) {
   StatField.extra => b.extra,
 };
 
+/// Time-label spacing (hours) so that at most eight labels span
+/// [visibleHours]: 5 min steps when zoomed into a few minutes, up to 10 days
+/// on a month.
+double chartLabelInterval(double visibleHours) {
+  const steps = [
+    5 / 60,
+    10 / 60,
+    15 / 60,
+    0.5,
+    1.0,
+    2.0,
+    3.0,
+    6.0,
+    12.0,
+    24.0,
+    48.0,
+    120.0,
+    240.0,
+  ];
+  for (final s in steps) {
+    if (visibleHours / s <= 8) return s;
+  }
+  return steps.last;
+}
+
 /// A time-series line chart over [fromMs, toMs). X is hours since [fromMs].
 /// Buckets further apart than two bucket widths break the line (data gaps).
-class StatChart extends StatelessWidget {
+///
+/// Unless [sparkline], the chart can be zoomed along the time axis with a
+/// two-finger pinch and panned with a two-finger drag; one finger is left to
+/// the surrounding list. The time labels get denser as the view narrows, and
+/// a "fit" button appears while zoomed.
+class StatChart extends StatefulWidget {
   const StatChart({
     super.key,
     required this.buckets,
@@ -45,8 +75,53 @@ class StatChart extends StatelessWidget {
   final double height;
   final Color? color;
 
-  /// No axes, no grid, no touch: for the dashboard.
+  /// No axes, no grid, no touch, no zoom: for the dashboard.
   final bool sparkline;
+
+  /// Furthest the time axis can be zoomed in (24× = one hour of a day).
+  static const maxZoom = 24.0;
+
+  @override
+  State<StatChart> createState() => _StatChartState();
+}
+
+class _StatChartState extends State<StatChart> {
+  final _zoom = TransformationController();
+  double _scale = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _zoom.addListener(_onZoom);
+  }
+
+  @override
+  void didUpdateWidget(StatChart old) {
+    super.didUpdateWidget(old);
+    // A new window (range or prev/next) starts unzoomed.
+    if (old.fromMs != widget.fromMs || old.toMs != widget.toMs) {
+      _zoom.value = Matrix4.identity();
+    }
+  }
+
+  @override
+  void dispose() {
+    _zoom.dispose();
+    super.dispose();
+  }
+
+  void _onZoom() {
+    final s = _zoom.value.getMaxScaleOnAxis();
+    if ((s - _scale).abs() > 0.01) setState(() => _scale = s);
+  }
+
+  List<StatBucket> get buckets => widget.buckets;
+  int get fromMs => widget.fromMs;
+  int get toMs => widget.toMs;
+  int get bucketMs => widget.bucketMs;
+  StatField get field => widget.field;
+  bool get band => widget.band;
+  bool get sparkline => widget.sparkline;
 
   double _x(int ms) => (ms - fromMs) / 3600000;
 
@@ -71,7 +146,9 @@ class StatChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final lineColor = color ?? scheme.primary;
+    final lineColor = widget.color ?? scheme.primary;
+    final height = widget.height;
+    final unit = widget.unit;
     final hours = (toMs - fromMs) / 3600000;
     final mainSegs = _segments(field);
     if (mainSegs.isEmpty) {
@@ -124,95 +201,120 @@ class StatChart extends StatelessWidget {
       bars.add(_bar(seg, lineColor, sparkline ? 1.5 : 2));
     }
 
-    final labelInterval = hours <= 24
-        ? 3.0
-        : hours <= 24 * 7
-        ? 24.0
-        : 24.0 * 5;
+    final visibleHours = hours / _scale;
+    final labelInterval = chartLabelInterval(visibleHours);
     final textStyle = Theme.of(context).textTheme.labelSmall;
 
-    return SizedBox(
-      height: height,
-      child: LineChart(
-        LineChartData(
-          minX: 0,
-          maxX: hours,
-          minY: lo - pad,
-          maxY: hi + pad,
-          lineBarsData: bars,
-          betweenBarsData: between,
-          clipData: const FlClipData.all(),
-          gridData: FlGridData(
-            show: !sparkline,
-            drawVerticalLine: true,
-            verticalInterval: labelInterval,
-            getDrawingHorizontalLine: (_) =>
-                FlLine(color: scheme.outlineVariant, strokeWidth: 0.5),
-            getDrawingVerticalLine: (_) =>
-                FlLine(color: scheme.outlineVariant, strokeWidth: 0.5),
-          ),
-          borderData: FlBorderData(show: false),
-          titlesData: FlTitlesData(
-            show: !sparkline,
-            topTitles: const AxisTitles(),
-            rightTitles: const AxisTitles(),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 44,
-                getTitlesWidget: (v, meta) {
-                  // The chart edges are padded values; they collide with the
-                  // nearest round label, so leave them out.
-                  if (v == meta.min || v == meta.max) {
-                    return const SizedBox.shrink();
-                  }
-                  return SideTitleWidget(
-                    meta: meta,
-                    child: Text(_num(v), style: textStyle),
-                  );
-                },
-              ),
-            ),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 24,
-                interval: labelInterval,
-                getTitlesWidget: (v, meta) {
-                  if (v >= hours) return const SizedBox.shrink();
-                  final t = DateTime.fromMillisecondsSinceEpoch(
-                    fromMs + (v * 3600000).round(),
-                  );
-                  final label = hours <= 24
-                      ? fmtTime.format(t)
-                      : '${t.day}/${t.month}';
-                  return SideTitleWidget(
-                    meta: meta,
-                    child: Text(label, style: textStyle),
-                  );
-                },
-              ),
+    final chart = LineChart(
+      LineChartData(
+        minX: 0,
+        maxX: hours,
+        minY: lo - pad,
+        maxY: hi + pad,
+        lineBarsData: bars,
+        betweenBarsData: between,
+        clipData: const FlClipData.all(),
+        gridData: FlGridData(
+          show: !sparkline,
+          drawVerticalLine: true,
+          verticalInterval: labelInterval,
+          getDrawingHorizontalLine: (_) =>
+              FlLine(color: scheme.outlineVariant, strokeWidth: 0.5),
+          getDrawingVerticalLine: (_) =>
+              FlLine(color: scheme.outlineVariant, strokeWidth: 0.5),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          show: !sparkline,
+          topTitles: const AxisTitles(),
+          rightTitles: const AxisTitles(),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 44,
+              getTitlesWidget: (v, meta) {
+                // The chart edges are padded values; they collide with the
+                // nearest round label, so leave them out.
+                if (v == meta.min || v == meta.max) {
+                  return const SizedBox.shrink();
+                }
+                return SideTitleWidget(
+                  meta: meta,
+                  child: Text(_num(v), style: textStyle),
+                );
+              },
             ),
           ),
-          lineTouchData: LineTouchData(
-            enabled: !sparkline,
-            touchTooltipData: LineTouchTooltipData(
-              getTooltipColor: (_) => scheme.inverseSurface,
-              getTooltipItems: (spots) => [
-                for (final s in spots)
-                  if (s.bar.barWidth > 0)
-                    LineTooltipItem(
-                      '${_num(s.y)} $unit\n${fmtTimeMs(fromMs + (s.x * 3600000).round())}',
-                      TextStyle(color: scheme.onInverseSurface),
-                    )
-                  else
-                    null,
-              ],
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 24,
+              interval: labelInterval,
+              getTitlesWidget: (v, meta) {
+                if (v >= hours) return const SizedBox.shrink();
+                final t = DateTime.fromMillisecondsSinceEpoch(
+                  fromMs + (v * 3600000).round(),
+                );
+                final label = visibleHours <= 48
+                    ? fmtTime.format(t)
+                    : '${t.day}/${t.month}';
+                return SideTitleWidget(
+                  meta: meta,
+                  child: Text(label, style: textStyle),
+                );
+              },
             ),
           ),
         ),
-        duration: Duration.zero,
+        lineTouchData: LineTouchData(
+          enabled: !sparkline,
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (_) => scheme.inverseSurface,
+            getTooltipItems: (spots) => [
+              for (final s in spots)
+                if (s.bar.barWidth > 0)
+                  LineTooltipItem(
+                    '${_num(s.y)} $unit\n${fmtTimeMs(fromMs + (s.x * 3600000).round())}',
+                    TextStyle(color: scheme.onInverseSurface),
+                  )
+                else
+                  null,
+            ],
+          ),
+        ),
       ),
+      transformationConfig: sparkline
+          ? const FlTransformationConfig()
+          : FlTransformationConfig(
+              scaleAxis: FlScaleAxis.horizontal,
+              maxScale: StatChart.maxZoom,
+              // One-finger drags scroll the page; two fingers zoom and pan.
+              panEnabled: false,
+              transformationController: _zoom,
+            ),
+      duration: Duration.zero,
+    );
+
+    return SizedBox(
+      height: height,
+      child: sparkline
+          ? chart
+          : Stack(
+              children: [
+                Positioned.fill(child: chart),
+                if (_scale > 1.01)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: IconButton(
+                      tooltip: 'Show the whole range',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.fit_screen_outlined, size: 20),
+                      onPressed: () => _zoom.value = Matrix4.identity(),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 

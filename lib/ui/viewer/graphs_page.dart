@@ -6,9 +6,10 @@ import '../../polar/models.dart';
 import 'chart.dart';
 import 'format.dart';
 
-enum _Range { day, week, month }
+enum _Range { hour, sixHours, day, week, month }
 
-/// Minute-stat graphs per type over a day, week or month.
+/// Minute-stat graphs per type over an hour, six hours, a day, a week or a
+/// month. Prev/next step by one window; the charts themselves pinch-zoom.
 class GraphsPage extends StatefulWidget {
   const GraphsPage({super.key});
 
@@ -19,39 +20,62 @@ class GraphsPage extends StatefulWidget {
 class _GraphsPageState extends State<GraphsPage> {
   PolarDataType _type = PolarDataType.hr;
   _Range _range = _Range.day;
-  DateTime _anchor = _today();
 
-  static DateTime _today() {
-    final n = DateTime.now();
-    return DateTime(n.year, n.month, n.day);
+  /// Any instant inside the shown window; [_window] aligns it to the range.
+  DateTime _anchor = DateTime.now();
+
+  (DateTime from, DateTime to) get _window {
+    final a = _anchor;
+    final day = DateTime(a.year, a.month, a.day);
+    return switch (_range) {
+      _Range.hour => (
+        DateTime(a.year, a.month, a.day, a.hour),
+        DateTime(a.year, a.month, a.day, a.hour + 1),
+      ),
+      _Range.sixHours => (
+        DateTime(a.year, a.month, a.day, a.hour - a.hour % 6),
+        DateTime(a.year, a.month, a.day, a.hour - a.hour % 6 + 6),
+      ),
+      _Range.day => (day, DateTime(a.year, a.month, a.day + 1)),
+      _Range.week => (
+        day.subtract(Duration(days: day.weekday - 1)),
+        DateTime(a.year, a.month, a.day - (day.weekday - 1) + 7),
+      ),
+      _Range.month => (
+        DateTime(a.year, a.month),
+        DateTime(a.year, a.month + 1),
+      ),
+    };
   }
 
-  (DateTime from, DateTime to) get _window => switch (_range) {
-    _Range.day => (_anchor, _anchor.add(const Duration(days: 1))),
-    _Range.week => (
-      _anchor.subtract(Duration(days: _anchor.weekday - 1)),
-      _anchor
-          .subtract(Duration(days: _anchor.weekday - 1))
-          .add(const Duration(days: 7)),
-    ),
-    _Range.month => (
-      DateTime(_anchor.year, _anchor.month),
-      DateTime(_anchor.year, _anchor.month + 1),
-    ),
-  };
-
   int get _bucketMs => switch (_range) {
-    _Range.day => 60000,
+    _Range.hour || _Range.sixHours || _Range.day => 60000,
     _Range.week => 600000,
     _Range.month => 3600000,
   };
 
   void _shift(int dir) {
+    final (from, _) = _window;
     setState(() {
+      // Step from the window start so DST days and month lengths work out.
       _anchor = switch (_range) {
-        _Range.day => _anchor.add(Duration(days: dir)),
-        _Range.week => _anchor.add(Duration(days: 7 * dir)),
-        _Range.month => DateTime(_anchor.year, _anchor.month + dir),
+        _Range.hour => DateTime(
+          from.year,
+          from.month,
+          from.day,
+          from.hour + dir,
+          30,
+        ),
+        _Range.sixHours => DateTime(
+          from.year,
+          from.month,
+          from.day,
+          from.hour + 6 * dir,
+          30,
+        ),
+        _Range.day => DateTime(from.year, from.month, from.day + dir, 12),
+        _Range.week => DateTime(from.year, from.month, from.day + 7 * dir, 12),
+        _Range.month => DateTime(from.year, from.month + dir, 1, 12),
       };
     });
   }
@@ -59,6 +83,8 @@ class _GraphsPageState extends State<GraphsPage> {
   String get _title {
     final (from, to) = _window;
     return switch (_range) {
+      _Range.hour || _Range.sixHours =>
+        '${fmtDate.format(from)} · ${fmtTime.format(from)} – ${fmtTime.format(to)}',
       _Range.day => fmtDateLong.format(from),
       _Range.week =>
         '${fmtDate.format(from)} – ${fmtDate.format(to.subtract(const Duration(days: 1)))}',
@@ -91,8 +117,8 @@ class _GraphsPageState extends State<GraphsPage> {
         title: const Text('Graphs'),
         actions: [
           TextButton(
-            onPressed: () => setState(() => _anchor = _today()),
-            child: const Text('Today'),
+            onPressed: () => setState(() => _anchor = DateTime.now()),
+            child: const Text('Now'),
           ),
         ],
       ),
@@ -114,7 +140,16 @@ class _GraphsPageState extends State<GraphsPage> {
             ),
             const SizedBox(height: 8),
             SegmentedButton<_Range>(
+              showSelectedIcon: false,
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                padding: WidgetStatePropertyAll(
+                  EdgeInsets.symmetric(horizontal: 6),
+                ),
+              ),
               segments: const [
+                ButtonSegment(value: _Range.hour, label: Text('1 h')),
+                ButtonSegment(value: _Range.sixHours, label: Text('6 h')),
                 ButtonSegment(value: _Range.day, label: Text('Day')),
                 ButtonSegment(value: _Range.week, label: Text('Week')),
                 ButtonSegment(value: _Range.month, label: Text('Month')),
@@ -196,7 +231,8 @@ class _GraphsPageState extends State<GraphsPage> {
                     Padding(
                       padding: const EdgeInsets.all(8),
                       child: Text(
-                        '${b.length} buckets · ${b.fold<int>(0, (s, x) => s + x.n)} samples',
+                        '${b.length} buckets · ${b.fold<int>(0, (s, x) => s + x.n)} samples'
+                        ' · pinch with two fingers to zoom the time axis',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
