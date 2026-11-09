@@ -177,8 +177,8 @@ class _SensorCard extends StatelessWidget {
 
 /// The current heart rate with freshness cues: a dot that lights up when a
 /// sample lands and fades over three seconds, how long ago that was, and a
-/// weak-signal note when the value has not moved for 30 s and the sensor sends
-/// no beat intervals (what the Verity Sense does when it loses the pulse).
+/// weak-signal note when the value has not moved for a minute and the sensor
+/// sends no beat intervals (what the Verity Sense does when it loses the pulse).
 class _LiveHrCard extends StatefulWidget {
   const _LiveHrCard(this.dc);
   final DeviceController dc;
@@ -189,7 +189,9 @@ class _LiveHrCard extends StatefulWidget {
 
 class _LiveHrCardState extends State<_LiveHrCard>
     with SingleTickerProviderStateMixin {
-  static const _weakAfter = Duration(seconds: 30);
+  /// Recorded data from the Verity Sense shows normal HR holding one value
+  /// for up to ~40 s; frozen (pulse lost) stretches run 60 s and longer.
+  static const _weakAfter = Duration(seconds: 60);
 
   late final AnimationController _pulse = AnimationController(
     vsync: this,
@@ -335,8 +337,10 @@ class _LiveHrCardState extends State<_LiveHrCard>
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'Weak signal: value unchanged for ${unchanged.inSeconds} s '
-                      'and no beat intervals. Tighten the band or move it up the arm.',
+                      'Weak signal: same value for ${unchanged.inSeconds} s. '
+                      'Samples still arrive, but the sensor repeats its last '
+                      'reading when it cannot find the pulse. Tighten the band '
+                      'or move it up the arm.',
                       style: small?.copyWith(color: scheme.error),
                     ),
                   ),
