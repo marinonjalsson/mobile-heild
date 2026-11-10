@@ -28,7 +28,7 @@ class DashboardPage extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 24),
           children: [
             _SensorCard(app.device, app.sync),
-            if (app.device.isConnected) _LiveHrCard(app.device),
+            if (app.settings.isPaired) _LiveHrCard(app.device),
             _TodayCard(app.repo, refreshKey: app.sync.dataVersion),
             _StorageCard(app.repo, refreshKey: app.sync.dataVersion),
           ],
