@@ -191,27 +191,6 @@ class _GraphsPageState extends State<GraphsPage> {
           body: ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              Row(
-                children: [
-                  IconButton(
-                    onPressed: () => _shift(-1),
-                    icon: const Icon(Icons.chevron_left),
-                  ),
-                  Expanded(
-                    child: Text(
-                      _title,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: toMs > DateTime.now().millisecondsSinceEpoch
-                        ? null
-                        : () => _shift(1),
-                    icon: const Icon(Icons.chevron_right),
-                  ),
-                ],
-              ),
               FutureBuilder<List<StatBucket>>(
                 future: _stats(fromMs, toMs, sync.dataVersion),
                 builder: (context, snap) {
@@ -276,6 +255,28 @@ class _GraphsPageState extends State<GraphsPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // The window: < date/time >, then the action bar.
+                  Row(
+                    children: [
+                      IconButton(
+                        onPressed: () => _shift(-1),
+                        icon: const Icon(Icons.chevron_left),
+                      ),
+                      Expanded(
+                        child: Text(
+                          _title,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: toMs > DateTime.now().millisecondsSinceEpoch
+                            ? null
+                            : () => _shift(1),
+                        icon: const Icon(Icons.chevron_right),
+                      ),
+                    ],
+                  ),
                   _BarRow<_Range>(
                     items: const [
                       (_Range.hour, '1 h'),
