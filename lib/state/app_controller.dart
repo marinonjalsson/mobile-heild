@@ -44,7 +44,8 @@ class AppController extends ChangeNotifier {
     liveHr = LiveHrService(device, repo);
     sync = SyncService(device.bridge, device, repo, settings, livePpi, liveHr);
     livePpi.syncBusy = () => sync.isRunning;
-    livePpi.liveWanted = () => sync.isLive;
+    livePpi.liveWanted = () =>
+        sync.isLive && sync.liveType == PolarDataType.ppi;
     livePpi.dataChanged = sync.dataChanged;
     liveHr.dataChanged = sync.dataChanged;
     settings.addListener(notifyListeners);

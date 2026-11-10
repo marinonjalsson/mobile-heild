@@ -395,13 +395,32 @@ class Repository {
     await _recomputeMinutes(txn, 'PPI', minutes);
   }
 
+  /// Stores ACC samples as per-minute chunks.
   Future<void> _storeAcc(Transaction txn, int id, PackedRecording r) async {
     final ts = r.ts!;
-    final xyz = r.xyz!;
-    final rate = r.sampleRateHz ?? 52;
     final n = ts.length;
     if (n == 0) return;
     final unix = List<int>.generate(n, (i) => polarNsToUnixMs(ts[i]));
+    final minutes = await _insertAcc(
+      txn,
+      id,
+      unix,
+      r.xyz!,
+      r.sampleRateHz ?? 52,
+    );
+    await _recomputeMinutes(txn, 'ACC', minutes);
+  }
+
+  /// Inserts [xyz] (interleaved, 3 × unix.length) for [unix] (ms, ascending)
+  /// as one chunk per minute and returns the minutes touched.
+  Future<Set<int>> _insertAcc(
+    Transaction txn,
+    int id,
+    List<int> unix,
+    Int32List xyz,
+    int rate,
+  ) async {
+    final n = unix.length;
     final minutes = <int>{};
     final batch = txn.batch();
     var chunkStart = 0;
@@ -426,7 +445,7 @@ class Repository {
       }
     }
     await batch.commit(noResult: true);
-    await _recomputeMinutes(txn, 'ACC', minutes);
+    return minutes;
   }
 
   // ---- minute stats ---------------------------------------------------------

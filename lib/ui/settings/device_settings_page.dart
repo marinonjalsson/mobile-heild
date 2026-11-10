@@ -192,17 +192,6 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                       label: const Text('Test the scheduled sync (30 s)'),
                     ),
                   ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Pulse quality during a live session'),
-                    subtitle: const Text(
-                      'Streams PP intervals to the phone (stored here) instead of '
-                      'recording them on the sensor; the sensor records them again '
-                      'when the session ends.',
-                    ),
-                    value: s.livePpi,
-                    onChanged: s.setLivePpi,
-                  ),
                 ],
               ),
               Section(

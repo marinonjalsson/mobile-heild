@@ -105,6 +105,24 @@ class SensorSettingOptions {
 }
 
 /// One chosen value per setting type, sent when starting a stream.
+/// Picks one value per setting type the device offers: [wanted] where the
+/// device allows it, else the first option. The Verity Sense wants every
+/// setting type it lists (CHANNELS included) in a start request.
+SensorSetting snapSensorSetting(
+  SensorSettingOptions options,
+  SensorSetting wanted,
+) {
+  final picked = <SettingType, int>{};
+  for (final e in options.options.entries) {
+    if (e.value.isEmpty) continue;
+    final want = wanted.values[e.key];
+    picked[e.key] = want != null && e.value.contains(want)
+        ? want
+        : e.value.first;
+  }
+  return picked.isEmpty ? wanted : SensorSetting(picked);
+}
+
 class SensorSetting {
   const SensorSetting(this.values);
   final Map<SettingType, int> values;

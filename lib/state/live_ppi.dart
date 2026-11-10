@@ -175,7 +175,7 @@ class LivePpiService extends ChangeNotifier {
   /// The sync service is mid-run; starting a stream then would race it.
   bool Function() syncBusy = () => false;
 
-  /// The user asked for a live session (sync service); without one the
+  /// The live session is about pulse intervals (sync service); otherwise the
   /// sensor keeps PPI for itself.
   bool Function() liveWanted = () => false;
 
@@ -194,7 +194,6 @@ class LivePpiService extends ChangeNotifier {
 
   /// Live PPI should be streaming now.
   bool get wantsStream =>
-      settings.livePpi &&
       settings.recordTypes.contains(PolarDataType.ppi) &&
       dc.isConnected &&
       _foreground &&

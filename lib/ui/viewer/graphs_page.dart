@@ -16,6 +16,8 @@ enum _Range { hour, sixHours, day, week, month }
 
 /// Minute-stat graphs per type over an hour, six hours, a day, a week or a
 /// month. Prev/next step by one window; the charts themselves pinch-zoom.
+/// "Live" in the type row streams the shown type (heart rate, pulse intervals
+/// or movement) and shows it in a card above the charts.
 class GraphsPage extends StatefulWidget {
   const GraphsPage({super.key});
 
@@ -240,7 +242,7 @@ class _GraphsPageState extends State<GraphsPage> {
           body: ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              if (sync.isLive) LiveHrCard(dc),
+              if (sync.isLive && _type == sync.liveType) LiveCard(dc, _type),
               FutureBuilder<List<StatBucket>>(
                 future: _stats(fromMs, toMs, sync.dataVersion),
                 builder: (context, snap) {
@@ -330,16 +332,6 @@ class _GraphsPageState extends State<GraphsPage> {
                         () => setState(() => _anchor = DateTime.now()),
                       ),
                       _BarAction(
-                        sync.isLive ? 'Stop' : 'Live',
-                        !appController.settings.isPaired ||
-                                (!sync.isLive && busy)
-                            ? null
-                            : () => runAction(
-                                context,
-                                sync.isLive ? sync.stopLive : sync.startLive,
-                              ),
-                      ),
-                      _BarAction(
                         'Sync',
                         busy || !appController.settings.isPaired
                             ? null
@@ -352,10 +344,35 @@ class _GraphsPageState extends State<GraphsPage> {
                       ),
                     ],
                   ),
+                  // Type row: the graph, and Live for that graph's stream
+                  // (heart rate or pulse intervals; movement cannot be
+                  // streamed). While live, picking another graph switches
+                  // the stream.
                   _BarRow<PolarDataType>(
                     items: [for (final t in viewerTypes) (t, _short(t))],
                     selected: _type,
-                    onSelected: (t) => setState(() => _type = t),
+                    onSelected: (t) {
+                      setState(() => _type = t);
+                      if (sync.isLive && SyncService.liveTypes.contains(t)) {
+                        runAction(context, () => sync.setLiveType(t));
+                      }
+                    },
+                    actions: [
+                      _BarAction(
+                        sync.isLive ? 'Stop' : 'Live',
+                        !sync.isLive &&
+                                (busy ||
+                                    !appController.settings.isPaired ||
+                                    !SyncService.liveTypes.contains(_type))
+                            ? null
+                            : () => runAction(
+                                context,
+                                () => sync.isLive
+                                    ? sync.stopLive()
+                                    : sync.startLive(_type),
+                              ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -378,13 +395,13 @@ class _GraphsPageState extends State<GraphsPage> {
         ),
       ],
       PolarDataType.ppi => [
+        _Panel('PP interval (ms) · mean', StatField.mean, unit: 'ms'),
         _Panel(
           'HRV · RMSSD (ms)',
           StatField.extra,
           unit: 'ms',
           color: scheme.tertiary,
         ),
-        _Panel('PP interval (ms) · mean', StatField.mean, unit: 'ms'),
       ],
       PolarDataType.acc => [
         _Panel(
@@ -441,10 +458,11 @@ class _BarRow<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Seven columns on a phone need the smaller label.
-    final text = actions.isEmpty
-        ? Theme.of(context).textTheme.labelLarge
-        : Theme.of(context).textTheme.labelMedium;
+    // Seven or eight columns on a phone need the smaller label.
+    final dense = items.length + actions.length > 5;
+    final text = dense
+        ? Theme.of(context).textTheme.labelMedium
+        : Theme.of(context).textTheme.labelLarge;
     return SizedBox(
       height: 48,
       child: Row(
@@ -457,7 +475,7 @@ class _BarRow<T> extends StatelessWidget {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     padding: EdgeInsets.symmetric(
-                      horizontal: actions.isEmpty ? 14 : 3,
+                      horizontal: dense ? 3 : 14,
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
@@ -492,7 +510,7 @@ class _BarRow<T> extends StatelessWidget {
             ),
           for (final a in actions)
             SizedBox(
-              width: 42,
+              width: dense ? 42 : 52,
               child: InkWell(
                 onTap: a.onTap,
                 child: Center(

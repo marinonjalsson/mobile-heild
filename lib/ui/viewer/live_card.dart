@@ -8,11 +8,22 @@ import '../../state/device_controller.dart';
 import '../../state/live_ppi.dart';
 import '../widgets/common.dart';
 
-/// The current heart rate with freshness cues, shown on the Graphs page
-/// during a live session ("Live" / "Stop" in the action bar; leaving the app
-/// ends it with a sync and disconnects).
+/// The live card of the Graphs page: the stream that belongs to the shown
+/// graph ("Live" / "Stop" in the type row; leaving the app ends the session
+/// with a sync and disconnects).
+class LiveCard extends StatelessWidget {
+  const LiveCard(this.dc, this.type, {super.key});
+  final DeviceController dc;
+  final PolarDataType type;
+
+  @override
+  Widget build(BuildContext context) =>
+      type == PolarDataType.ppi ? LivePpiCard(dc) : LiveHrCard(dc);
+}
+
+/// The current heart rate with freshness cues (the Heart rate graph live).
 ///
-/// With the live PP-interval stream on (app open, connected), the pulse state
+/// With the live PP-interval stream on (the HRV graph), the pulse state
 /// comes from real beats: the dot lights on each batch with a good beat, the
 /// card says whether the pulse is found, unclear or lost, and shows the last
 /// minute's HRV. Without it, the fallback is time-based: a value that has not
@@ -190,7 +201,7 @@ class _LiveHrCardState extends State<LiveHrCard>
             style: small?.copyWith(color: stale ? scheme.error : null),
           ),
           if (beats)
-            _pulseLine(context, pulse)
+            PulseLine(_live)
           else if (weak)
             _weakLine(context, unchanged),
         ],
@@ -198,12 +209,47 @@ class _LiveHrCardState extends State<LiveHrCard>
     );
   }
 
-  Widget _pulseLine(BuildContext context, PulseState pulse) {
+  Widget _weakLine(BuildContext context, Duration? unchanged) {
     final scheme = Theme.of(context).colorScheme;
     final small = Theme.of(context).textTheme.bodySmall;
-    final last = _live.lastBatchAt;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          Icon(Icons.signal_cellular_nodata, size: 16, color: scheme.error),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Weak signal: same value for ${unchanged?.inSeconds ?? 0} s. '
+              'Samples still arrive, but the sensor repeats its last '
+              'reading when it cannot find the pulse. Tighten the band '
+              'or move it up the arm.',
+              style: small?.copyWith(color: scheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One line on the pulse as the live PP intervals see it: found, unclear,
+/// lost or still warming up, with the last minute's HRV when found.
+class PulseLine extends StatelessWidget {
+  const PulseLine(this.live, {this.showHrv = true, super.key});
+  final LivePpiService live;
+
+  /// Append the last minute's HRV when the pulse is found.
+  final bool showHrv;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
+    final pulse = live.state;
+    final last = live.lastBatchAt;
     final ago = last == null ? null : DateTime.now().difference(last).inSeconds;
-    final rmssd = _live.rmssdLastMinute;
+    final rmssd = showHrv ? live.rmssdLastMinute : null;
     final (IconData icon, String text, Color color) = switch (pulse) {
       PulseState.warmingUp => (
         Icons.hourglass_top,
@@ -242,27 +288,112 @@ class _LiveHrCardState extends State<LiveHrCard>
       ),
     );
   }
+}
 
-  Widget _weakLine(BuildContext context, Duration? unchanged) {
+/// Live pulse intervals (the HRV graph live): heart rate from the beats, the
+/// last interval, HRV over the last minute and the pulse state.
+class LivePpiCard extends StatefulWidget {
+  const LivePpiCard(this.dc, {super.key});
+  final DeviceController dc;
+
+  @override
+  State<LivePpiCard> createState() => _LivePpiCardState();
+}
+
+class _LivePpiCardState extends State<LivePpiCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 3),
+  );
+  Timer? _tick;
+  int? _seenBeatBatchMs;
+
+  LivePpiService get _live => appController.livePpi;
+
+  @override
+  void initState() {
+    super.initState();
+    _live.addListener(_onLive);
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _live.removeListener(_onLive);
+    _tick?.cancel();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  void _onLive() {
+    final session = _live.session;
+    final at = session?.lastBatchMs;
+    if (session != null && at != null && at != _seenBeatBatchMs) {
+      _seenBeatBatchMs = at;
+      if (session.goodBeatsSince(at) > 0) {
+        _pulse.value = 1;
+        _pulse.animateTo(0, curve: Curves.easeOut);
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dc = widget.dc;
     final scheme = Theme.of(context).colorScheme;
     final small = Theme.of(context).textTheme.bodySmall;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          Icon(Icons.signal_cellular_nodata, size: 16, color: scheme.error),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              'Weak signal: same value for ${unchanged?.inSeconds ?? 0} s. '
-              'Samples still arrive, but the sensor repeats its last '
-              'reading when it cannot find the pulse. Tighten the band '
-              'or move it up the arm.',
-              style: small?.copyWith(color: scheme.error),
-            ),
-          ),
-        ],
+    final session = _live.session;
+    final pulse = _live.state;
+    final hasBeats = session != null && session.length > 0;
+    final bad = pulse == PulseState.poor || pulse == PulseState.lost;
+    final rmssd = _live.rmssdLastMinute;
+    return Section(
+      title: 'Live pulse intervals',
+      trailing: FadeTransition(
+        opacity: _pulse,
+        child: Icon(Icons.circle, size: 10, color: scheme.primary),
       ),
+      children: [
+        if (!hasBeats)
+          Text(
+            _live.lastError != null
+                ? 'Pulse intervals not available: ${_live.lastError}'
+                : _live.streaming
+                ? 'Waiting for the first beats… (the sensor needs about 25 s)'
+                : dc.isConnected
+                ? 'Starting the pulse-interval stream…'
+                : dc.connection == PolarConnectionState.connecting
+                ? 'Connecting to the sensor…'
+                : 'Sensor not reachable',
+            style: small,
+          )
+        else ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '${session.hr.last}',
+                style: Theme.of(context).textTheme.displayMedium
+                    ?.copyWith(color: bad ? scheme.outline : null),
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  'bpm · PP ${session.ppi.last} ms'
+                  '${rmssd == null ? '' : ' · HRV ${rmssd.round()} ms'}',
+                ),
+              ),
+            ],
+          ),
+          Text('${session.length} beats this session', style: small),
+          PulseLine(_live, showHrv: false),
+        ],
+      ],
     );
   }
 }

@@ -19,8 +19,8 @@ Two milestones are in:
   the moment it is switched on (offline recording, trigger on power-on). Types, ACC rate/range and
   the sync interval are in Settings → Recording.
 - Tabs: Graphs · Device · Table · Settings. Graphs opens first: a header per type (Heart rate ·
-  Pulse intervals/HRV · Movement), the date window, an action bar (time ranges, Now, Live, Sync)
-  and the type row stacked above the navigation bar, and a status line while a sync runs; each
+  Pulse intervals/HRV · Movement), the date window, an action bar (time ranges, Now, Sync)
+  and the type row with Live stacked above the navigation bar, and a status line while a sync runs; each
   fetched recording shows up in the chart as it lands. The Device tab shows the sensor's
   connection, sync status, battery, storage, firmware and device information, and the phone's
   storage.
@@ -31,13 +31,15 @@ Two milestones are in:
 - Each sync: set the clock, stop the running recordings, fetch and store them, delete them from the
   sensor, re-arm the trigger and start recording again. Everything is logged in Settings → Storage →
   Sync log. Errors are retried on the next sync.
-- **Live** (in the Graphs action bar) is one tap away: the phone connects and streams the heart rate, and
-  PP intervals are **streamed to the phone** instead of being recorded on the sensor (it cannot do
-  both). Each beat carries a quality flag, so the dashboard can say "pulse found / unclear / lost"
-  and show live HRV; the streamed beats are stored like any recording (tagged *live*). *Stop* or
-  leaving the app ends the session with a sync, and the sensor records PP intervals again. Known
-  gap: if the connection drops during a live session, PP intervals resume only at the next sync or
-  power-on; heart rate and acceleration are unaffected.
+- **Live** (in the Graphs type row) is one tap away and follows the graph you are on: on *Heart
+  rate* the phone connects and streams the heart rate; on *HRV* it streams the PP intervals
+  instead of letting the sensor record them (it cannot do both). Each beat carries a quality flag,
+  so the card can say "pulse found / unclear / lost" and show live HRV; the streamed beats are
+  stored like any recording (tagged *live*). Switching graphs during a session switches the
+  stream. *Stop* or leaving the app ends the session with a sync, and the sensor records PP
+  intervals again. Known gap: if the connection drops during a live session, PP intervals resume
+  only at the next sync or power-on; heart rate and acceleration are unaffected. Movement has no
+  live mode: starting an accelerometer stream on this sensor (firmware 3.0.16) makes it reboot.
 - The live heart-rate number alone cannot show whether the sensor still sees your pulse: the Verity
   Sense repeats its last value when it loses it. Without live PP intervals the dashboard treats a
   value unchanged for 60 s as held and says so.

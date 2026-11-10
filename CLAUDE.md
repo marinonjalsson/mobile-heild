@@ -15,7 +15,8 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
   `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `app_controller.dart` (owns db/settings/sync; global `appController` in `main.dart`).
 - `lib/ui/` — `home_page.dart` (Graphs / Device / Table / Settings), `viewer/` (`dashboard_page.dart` = the Device tab:
-  sensor, sync, details, phone storage; `live_card.dart` the live HR card shown on Graphs during a live session;
+  sensor, sync, details, phone storage; `live_card.dart` the live cards shown on Graphs during a live session (HR card on
+  Heart rate, PP-interval card on HRV);
   graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
   with `FlTransformationConfig`, two-finger only so the list keeps scrolling; `graphs_page.dart` ranges 1 h/6 h/day/week/month,
   table + recording detail), `settings/` (settings, device settings), and the milestone-1 control panel:
@@ -54,8 +55,14 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - One sync round (`SyncService._run`): set clock → stop running recordings → list → fetch packed → `Repository.storeRecording` →
   delete on sensor → ensure trigger + restart recordings → retention. Never fatal: errors are logged to `sync_log` and
   retried on the next trigger.
-- Live session (`SyncService.startLive/stopLive`, "Live"/"Stop" in the Graphs action bar): the only way to stay connected. Streams HR
-  (and PPI via `LivePpiService.liveWanted`) until Stop or the app leaves the foreground, then syncs and disconnects.
+- Live session (`SyncService.startLive(type)/setLiveType/stopLive`, "Live"/"Stop" in the Graphs type row): the only way to
+  stay connected. The stream follows the selected graph (`liveType`): Heart rate → HR stream, HRV → PP intervals via
+  `LivePpiService.liveWanted`; switching graphs while live switches the stream. **Movement cannot be streamed**: on FW 3.0.16
+  an online ACC stream makes the sensor go silent and reboot within seconds (BLE supervision timeout), with or without the
+  offline ACC/PPI recordings stopped first (tested 2026-11-10), so Live is greyed out there (`SyncService.liveTypes`).
+  The session runs until Stop or the app leaves the foreground, then syncs and disconnects. `_ensureLiveStreams` runs once
+  per connection (`_liveEnsured`): it logs, logging notifies the device controller, and re-running from that
+  notification once looped hundreds of times a second.
 - Service protocol (Dart → Kotlin): `serviceStart` before connecting, `serviceNotification(title, text)` on phase changes,
   `serviceIdle` after every disconnect (20 s fallback for disconnects we did not ask for). Kotlin starts the service
   itself on a presence event and on the sync alarm.
@@ -64,7 +71,7 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - Timestamps: Polar ns since 2000-01-01 in the sensor's *local* time → `polarNsToUnixMs` subtracts the phone zone offset.
   Offline HR has no stamps (1 Hz from start); PPI accumulates intervals when stamps are 0 (offline PPI stamps from the
   Verity Sense start in 2000 and are ignored).
-- Live PPI (`lib/state/live_ppi.dart`): during a live session in the foreground, `LivePpiService` stops the sensor's
+- Live PPI (`lib/state/live_ppi.dart`): during a live session on the HRV graph in the foreground, `LivePpiService` stops the sensor's
   PPI recording and streams PP intervals instead (the sensor cannot do both); samples are stamped on arrival and stored as a
   `source = 'live'` recording that grows in place (flush every 60 s). Session end → stream stops, PPI recording re-armed.
   `SyncService._ensureRecording` skips PPI while `livePpi.holdsPpi`; `_afterRun` calls `livePpi.reconcile()`. The dashboard's

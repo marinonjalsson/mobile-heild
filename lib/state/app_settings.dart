@@ -35,7 +35,6 @@ class AppSettings extends ChangeNotifier {
 
   /// While the app is open and connected, stream PP intervals to the phone
   /// (pulse quality on the dashboard) instead of recording them on the sensor.
-  bool livePpi = true;
 
   bool get isPaired => pairedDeviceId != null;
 
@@ -56,7 +55,6 @@ class AppSettings extends ChangeNotifier {
     retentionDays =
         int.tryParse(await _repo.getSetting('retention_days') ?? '') ?? 30;
     autoSync = (await _repo.getSetting('auto_sync') ?? 'false') == 'true';
-    livePpi = (await _repo.getSetting('live_ppi') ?? 'true') == 'true';
     notifyListeners();
   }
 
@@ -110,12 +108,6 @@ class AppSettings extends ChangeNotifier {
   Future<void> setAutoSync(bool v) async {
     autoSync = v;
     await _repo.setSetting('auto_sync', '$v');
-    notifyListeners();
-  }
-
-  Future<void> setLivePpi(bool v) async {
-    livePpi = v;
-    await _repo.setSetting('live_ppi', '$v');
     notifyListeners();
   }
 

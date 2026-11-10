@@ -99,7 +99,27 @@ class SyncService extends ChangeNotifier {
 
   /// The user asked for live data; the connection stays up while true.
   bool liveRequested = false;
+
+  /// What the live session streams: HR on the Heart rate graph, PP intervals
+  /// on HRV. Follows the selected graph. Movement cannot be streamed: the
+  /// Verity Sense (FW 3.0.16) reboots as soon as an online ACC stream starts
+  /// while it records offline, so Live is greyed out on that graph.
+  PolarDataType liveType = PolarDataType.hr;
+
+  /// The types a live session can stream.
+  static const liveTypes = {PolarDataType.hr, PolarDataType.ppi};
+
+  static const _liveNeeded = {
+    'FEATURE_HR',
+    'FEATURE_POLAR_ONLINE_STREAMING',
+    'FEATURE_POLAR_OFFLINE_RECORDING',
+  };
   bool _liveStarting = false;
+
+  /// [_ensureLiveStreams] ran for this connection; it runs once per
+  /// connection, type switch and sync, never from a stream's own events
+  /// (logging notifies the device controller, which would loop back here).
+  bool _liveEnsured = false;
 
   /// Give up on a connect attempt after this: the sensor is off or away.
   static const connectTimeout = Duration(seconds: 90);
@@ -194,11 +214,12 @@ class SyncService extends ChangeNotifier {
       }
       if (liveRequested &&
           !_running &&
-          dc.featuresReady.contains('FEATURE_HR') &&
-          !dc.streams.containsKey(PolarDataType.hr)) {
+          !_liveEnsured &&
+          dc.featuresReady.containsAll(_liveNeeded)) {
         unawaited(_ensureLiveStreams());
       }
     } else if (dc.connection == PolarConnectionState.disconnected) {
+      _liveEnsured = false;
       if (_running) {
         // The run will fail on its next call and report it.
       } else {
@@ -261,13 +282,15 @@ class SyncService extends ChangeNotifier {
 
   // ---- live session ---------------------------------------------------------
 
-  /// Connects (if needed) and streams HR to the dashboard until [stopLive].
-  Future<void> startLive() async {
+  /// Connects (if needed) and streams [type] to the Graphs page until
+  /// [stopLive]. While live, [setLiveType] switches the stream.
+  Future<void> startLive(PolarDataType type) async {
     final id = settings.pairedDeviceId;
-    if (id == null || liveRequested) return;
+    if (id == null || liveRequested || !liveTypes.contains(type)) return;
     liveRequested = true;
+    liveType = type;
     notifyListeners();
-    _log('info', 'live started');
+    _log('info', 'live started (${type.label})');
     _idle?.cancel();
     await bridge.serviceStart();
     if (dc.isConnected && dc.deviceId == id) {
@@ -278,17 +301,34 @@ class SyncService extends ChangeNotifier {
     await _connect(id, 'live');
   }
 
+  /// Switches a running live session to [type] (starts one otherwise).
+  Future<void> setLiveType(PolarDataType type) async {
+    if (!liveRequested) return startLive(type);
+    if (type == liveType || !liveTypes.contains(type)) return;
+    liveType = type;
+    notifyListeners();
+    _log('info', 'live switched to ${type.label}');
+    if (!_running && dc.isConnected) await _ensureLiveStreams();
+  }
+
+  /// Starts the stream of [liveType] and stops the others.
   Future<void> _ensureLiveStreams() async {
     if (_liveStarting || !liveRequested || !dc.isConnected) return;
     _liveStarting = true;
+    _liveEnsured = true;
     try {
-      if (!dc.streams.containsKey(PolarDataType.hr)) {
+      final hr = liveType == PolarDataType.hr;
+      if (hr && !dc.streams.containsKey(PolarDataType.hr)) {
         await dc.startStream(PolarDataType.hr);
+      } else if (!hr && dc.streams.containsKey(PolarDataType.hr)) {
+        await dc.stopStream(PolarDataType.hr);
       }
       unawaited(
         bridge.serviceNotification(
           'Live · ${settings.pairedName ?? dc.deviceId}',
-          'Streaming heart rate to the dashboard',
+          liveType == PolarDataType.ppi
+              ? 'Streaming pulse intervals'
+              : 'Streaming heart rate',
         ),
       );
     } catch (e) {
@@ -296,11 +336,11 @@ class SyncService extends ChangeNotifier {
     } finally {
       _liveStarting = false;
     }
-    _log(
-      'info',
-      'live HR streaming; PP intervals ${livePpi.wantsStream ? 'wanted' : 'not wanted'}',
-    );
-    unawaited(livePpi.reconcile());
+    _log('info', 'live ${liveType.label} streaming');
+    // The live connect leaves the phase at "connecting"; no sync follows.
+    if (phase == SyncPhase.connecting) _setPhase(SyncPhase.idle, '');
+    // Hands the PPI recording back to the sensor when not wanted.
+    await livePpi.reconcile();
   }
 
   /// Ends the live session: stops the streams, syncs so the graphs are
@@ -453,17 +493,7 @@ class SyncService extends ChangeNotifier {
     final wanted = settings.accSetting();
     try {
       final options = await bridge.requestOfflineRecordingSettings(id, type);
-      // The device wants every setting type it offers (CHANNELS included), so
-      // start from its option list and snap our preferences onto it.
-      final picked = <SettingType, int>{};
-      for (final e in options.options.entries) {
-        if (e.value.isEmpty) continue;
-        final want = wanted.values[e.key];
-        picked[e.key] = want != null && e.value.contains(want)
-            ? want
-            : e.value.first;
-      }
-      return picked.isEmpty ? wanted : SensorSetting(picked);
+      return snapSensorSetting(options, wanted);
     } on PolarException catch (e) {
       _log('warn', 'offline settings for ${type.label}: $e');
       return wanted;
