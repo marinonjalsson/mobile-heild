@@ -18,9 +18,12 @@ Two milestones are in:
 - The sensor records **heart rate, PP intervals (HRV) and acceleration** into its own memory from
   the moment it is switched on (offline recording, trigger on power-on). Types, ACC rate/range and
   the sync interval are in Settings → Recording.
-- The app opens on the Graphs tab: a header per type (Heart rate · Pulse intervals/HRV · Movement),
-  type and range controls above the navigation bar, "Now" and "Sync now" in the top bar, and a
-  progress line while a sync runs; each fetched recording shows up in the chart as it lands.
+- Tabs: Graphs · Device · Table · Settings. Graphs opens first: a header per type (Heart rate ·
+  Pulse intervals/HRV · Movement), the date window, an action bar (time ranges, Now, Live, Sync)
+  and the type row stacked above the navigation bar, and a status line while a sync runs; each
+  fetched recording shows up in the chart as it lands. The Device tab shows the sensor's
+  connection, sync status, battery, storage, firmware and device information, and the phone's
+  storage.
 - The phone does **not** stay connected. It connects for a sync on a schedule (every 2 h by
   default, Settings → Recording), when you open the app with data older than 30 min, on *Sync now*,
   and optionally when the sensor comes into range (Settings → Device); then it disconnects and
@@ -28,7 +31,7 @@ Two milestones are in:
 - Each sync: set the clock, stop the running recordings, fetch and store them, delete them from the
   sensor, re-arm the trigger and start recording again. Everything is logged in Settings → Storage →
   Sync log. Errors are retried on the next sync.
-- **Live** (dashboard button) is one tap away: the phone connects and streams the heart rate, and
+- **Live** (in the Graphs action bar) is one tap away: the phone connects and streams the heart rate, and
   PP intervals are **streamed to the phone** instead of being recorded on the sensor (it cannot do
   both). Each beat carries a quality flag, so the dashboard can say "pulse found / unclear / lost"
   and show live HRV; the streamed beats are stored like any recording (tagged *live*). *Stop* or

@@ -6,7 +6,7 @@ import 'viewer/dashboard_page.dart';
 import 'viewer/graphs_page.dart';
 import 'viewer/table_page.dart';
 
-/// Bottom navigation: the data viewer first, the device under Settings.
+/// Bottom navigation: Graphs first, then the device, the table, settings.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -15,8 +15,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  /// Graphs first: that is what the app is for day to day.
-  int _index = 1;
+  int _index = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -32,8 +31,8 @@ class _HomePageState extends State<HomePage> {
           body: IndexedStack(
             index: _index,
             children: const [
-              DashboardPage(),
               GraphsPage(),
+              DevicePage(),
               TablePage(),
               SettingsPage(),
             ],
@@ -43,13 +42,13 @@ class _HomePageState extends State<HomePage> {
             onDestinationSelected: (i) => setState(() => _index = i),
             destinations: const [
               NavigationDestination(
-                icon: Icon(Icons.favorite_outline),
-                selectedIcon: Icon(Icons.favorite),
-                label: 'Dashboard',
-              ),
-              NavigationDestination(
                 icon: Icon(Icons.show_chart),
                 label: 'Graphs',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.watch_outlined),
+                selectedIcon: Icon(Icons.watch),
+                label: 'Device',
               ),
               NavigationDestination(
                 icon: Icon(Icons.table_rows_outlined),

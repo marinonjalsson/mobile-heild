@@ -10,6 +10,7 @@ import '../../state/sync_service.dart';
 import '../widgets/common.dart';
 import 'chart.dart';
 import 'format.dart';
+import 'live_card.dart';
 
 enum _Range { hour, sixHours, day, week, month }
 
@@ -239,6 +240,7 @@ class _GraphsPageState extends State<GraphsPage> {
           body: ListView(
             padding: const EdgeInsets.all(12),
             children: [
+              if (sync.isLive) LiveHrCard(dc),
               FutureBuilder<List<StatBucket>>(
                 future: _stats(fromMs, toMs, sync.dataVersion),
                 builder: (context, snap) {
@@ -326,6 +328,16 @@ class _GraphsPageState extends State<GraphsPage> {
                       _BarAction(
                         'Now',
                         () => setState(() => _anchor = DateTime.now()),
+                      ),
+                      _BarAction(
+                        sync.isLive ? 'Stop' : 'Live',
+                        !appController.settings.isPaired ||
+                                (!sync.isLive && busy)
+                            ? null
+                            : () => runAction(
+                                context,
+                                sync.isLive ? sync.stopLive : sync.startLive,
+                              ),
                       ),
                       _BarAction(
                         'Sync',
@@ -445,7 +457,7 @@ class _BarRow<T> extends StatelessWidget {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     padding: EdgeInsets.symmetric(
-                      horizontal: actions.isEmpty ? 14 : 5,
+                      horizontal: actions.isEmpty ? 14 : 3,
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
@@ -480,7 +492,7 @@ class _BarRow<T> extends StatelessWidget {
             ),
           for (final a in actions)
             SizedBox(
-              width: 58,
+              width: 46,
               child: InkWell(
                 onTap: a.onTap,
                 child: Center(
