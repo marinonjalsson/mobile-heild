@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -255,6 +256,19 @@ class Repository {
     final ts = sampleTsMs != null && sampleTsMs.length == hr.length
         ? sampleTsMs
         : hrTimestamps(startMs, hr.length);
+    final minutes = await _insertHr(txn, id, ts, hr, flags);
+    await _recomputeMinutes(txn, 'HR', minutes);
+  }
+
+  /// Inserts HR rows and returns the minutes they touch. [flags] packs bit0
+  /// skin contact, bit1 contact supported (the offline HR encoding).
+  Future<Set<int>> _insertHr(
+    Transaction txn,
+    int id,
+    List<int> ts,
+    List<int> hr,
+    List<int> flags,
+  ) async {
     final batch = txn.batch();
     final minutes = <int>{};
     for (var i = 0; i < hr.length; i++) {
@@ -273,7 +287,28 @@ class Repository {
       minutes.add(minuteFloor(ts[i]));
     }
     await batch.commit(noResult: true);
-    await _recomputeMinutes(txn, 'HR', minutes);
+    return minutes;
+  }
+
+  /// Adds samples to the end of a live HR recording (phone-stamped times)
+  /// and recomputes only the minutes they touch. Cheap enough to run every
+  /// minute on a session of many hours; a full [storeRecording] is not.
+  Future<void> appendHr(
+    int recordingId,
+    List<int> tsMs,
+    List<int> hr,
+    List<int> flags,
+  ) async {
+    if (tsMs.isEmpty) return;
+    await db.transaction((txn) async {
+      final minutes = await _insertHr(txn, recordingId, tsMs, hr, flags);
+      await txn.rawUpdate(
+        'UPDATE recordings SET sample_count = sample_count + ?, '
+        'end_ms = MAX(end_ms, ?) WHERE id = ?',
+        [tsMs.length, tsMs.last, recordingId],
+      );
+      await _recomputeMinutes(txn, 'HR', minutes);
+    });
   }
 
   /// Drops live HR rows of [deviceId] inside [fromMs, toMs] (an offline

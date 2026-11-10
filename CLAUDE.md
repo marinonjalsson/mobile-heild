@@ -60,7 +60,9 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
   pulse state (good/poor/lost) comes from `blockerBit` + `errorEstimate ≤ 30 ms`, never from skin contact (unreliable on this
   sensor). Live HR samples carry nothing but the number, so without PPI the card falls back to "same value for 60 s = held".
 - Live HR (`lib/state/live_hr.dart`): `LiveHrService` stamps every live HR sample on arrival and stores the session as a
-  `source = 'live'` HR recording (flush every 60 s, `sampleTsMs` + `replaceId` on `storeRecording`). The sensor records HR
+  `source = 'live'` HR recording: first flush and any flush after a trim rewrite it (`storeRecording` with `sampleTsMs` +
+  `replaceId`), every other flush only appends the new samples (`appendHr`). Never rewrite a growing session on every
+  flush: that once saturated the DB thread (a cover-during-write loop re-stored 11 k rows every second, 80 % CPU all day). The sensor records HR
   at the same time, so when the sync stores an offline HR recording the repository drops live rows inside its span
   (`_trimLiveHr`, last sample covers its full second) and `SyncService` calls `liveHr.covered(start, end)` so the in-memory
   session forgets them too. Offline always wins; live only fills the time since the last sync.
