@@ -485,14 +485,14 @@ class _BarRow<T> extends StatelessWidget {
             ),
           if (actions.isNotEmpty)
             VerticalDivider(
-              width: 8,
+              width: 4,
               indent: 12,
               endIndent: 12,
               color: scheme.outlineVariant,
             ),
           for (final a in actions)
             SizedBox(
-              width: 46,
+              width: 42,
               child: InkWell(
                 onTap: a.onTap,
                 child: Center(
