@@ -26,17 +26,23 @@ enum SyncPhase {
   error,
 }
 
-/// Keeps the sensor recording and the phone's database in step.
+/// Keeps the sensor recording and the phone's database in step without a
+/// standing connection: every trigger connects, syncs and disconnects, and
+/// the phone rests in between.
 ///
-/// Triggers: the sensor appearing (Companion Device Manager event through the
-/// SDK), app start when a sensor is paired, the user's "Sync now", and a
-/// periodic rotation while connected. One run at a time; a trigger during a run
-/// queues exactly one more run.
+/// Triggers: the schedule (Kotlin alarm → `scheduledSync` event), the app
+/// starting or coming to the foreground, the user's "Sync now", and, if
+/// enabled, the sensor appearing (Companion Device Manager event through the
+/// SDK). One run at a time; a trigger during a run queues exactly one more.
+///
+/// A *live session* ([startLive]) is the one way to stay connected: it
+/// streams HR (and PP intervals, see [LivePpiService]) to the dashboard until
+/// the user stops it or the app leaves the foreground; it ends with a sync.
 ///
 /// Each run: set the sensor clock → stop running offline recordings → list →
 /// fetch each recording (packed) → store → delete from the sensor → make sure
-/// the system-start trigger and the configured recordings are active → start a
-/// live HR stream → retention.
+/// the system-start trigger and the configured recordings are active →
+/// retention.
 class SyncService extends ChangeNotifier {
   SyncService(
     this.bridge,
@@ -48,6 +54,7 @@ class SyncService extends ChangeNotifier {
   ) {
     _events = bridge.events.listen(_onEvent);
     dc.addListener(_onDeviceChanged);
+    settings.addListener(_onSettings);
   }
 
   final PolarBridge bridge;
@@ -76,7 +83,6 @@ class SyncService extends ChangeNotifier {
     notifyListeners();
   }
 
-  DateTime? nextRotationAt;
   String? lastError;
   DiskSpace? diskSpace;
   int lastRunRecordings = 0;
@@ -85,10 +91,21 @@ class SyncService extends ChangeNotifier {
   bool _running = false;
   bool _queued = false;
   bool _syncOnReady = false;
-  Timer? _rotation;
   Timer? _idle;
+  Timer? _connectTimeout;
   DateTime? _lastAppeared;
   DateTime? _lastDisappeared;
+  int? _scheduledHours;
+
+  /// The user asked for live data; the connection stays up while true.
+  bool liveRequested = false;
+  bool _liveStarting = false;
+
+  /// Give up on a connect attempt after this: the sensor is off or away.
+  static const connectTimeout = Duration(seconds: 90);
+
+  /// Opening the app syncs when the last sync is older than this.
+  static const staleAfter = Duration(minutes: 30);
 
   static const _needed = {
     'FEATURE_POLAR_OFFLINE_RECORDING',
@@ -97,6 +114,33 @@ class SyncService extends ChangeNotifier {
   };
 
   bool get isRunning => _running;
+  bool get isLive => liveRequested;
+
+  /// Arms (or cancels) the Kotlin alarm to match the setting.
+  Future<void> applySchedule() async {
+    final h = settings.syncEveryHours;
+    if (h == _scheduledHours) return;
+    _scheduledHours = h;
+    await bridge.scheduleSync(h);
+    _log('info', h == 0 ? 'scheduled sync off' : 'scheduled sync every $h h');
+  }
+
+  void _onSettings() => unawaited(applySchedule());
+
+  /// App lifecycle: a live session ends when the app leaves the foreground;
+  /// opening the app syncs if the data is stale.
+  void onForeground(bool foreground) {
+    if (!foreground) {
+      if (liveRequested) unawaited(stopLive(reason: 'app in background'));
+      return;
+    }
+    if (!settings.isPaired || _running || dc.isConnected) return;
+    if (dc.connection == PolarConnectionState.connecting) return;
+    final last = lastSyncAt;
+    if (last == null || DateTime.now().difference(last) > staleAfter) {
+      unawaited(connectAndSync(reason: 'app opened'));
+    }
+  }
 
   bool _matchesPaired(String? identifier) {
     if (identifier == null) return true;
@@ -134,19 +178,27 @@ class SyncService extends ChangeNotifier {
         _lastDisappeared = now;
         _log('info', 'sensor out of range (${e.identifier})');
         _scheduleIdleCheck();
+      case 'scheduledSync':
+        _log('info', 'scheduled sync');
+        unawaited(connectAndSync(reason: 'scheduled'));
     }
   }
 
   void _onDeviceChanged() {
     if (dc.isConnected) {
       _idle?.cancel();
+      _connectTimeout?.cancel();
       if (_syncOnReady && dc.featuresReady.containsAll(_needed)) {
         _syncOnReady = false;
         unawaited(syncNow(reason: 'connected'));
       }
+      if (liveRequested &&
+          !_running &&
+          dc.featuresReady.contains('FEATURE_HR') &&
+          !dc.streams.containsKey(PolarDataType.hr)) {
+        unawaited(_ensureLiveStreams());
+      }
     } else if (dc.connection == PolarConnectionState.disconnected) {
-      _rotation?.cancel();
-      nextRotationAt = null;
       if (_running) {
         // The run will fail on its next call and report it.
       } else {
@@ -154,6 +206,21 @@ class SyncService extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  void _armConnectTimeout() {
+    _connectTimeout?.cancel();
+    _connectTimeout = Timer(connectTimeout, () async {
+      if (dc.isConnected || _running) return;
+      _syncOnReady = false;
+      _log('warn', 'sensor not found within ${connectTimeout.inSeconds} s');
+      _setPhase(SyncPhase.error, 'Sensor not in range');
+      if (liveRequested) {
+        liveRequested = false;
+        notifyListeners();
+      }
+      await _rest();
+    });
   }
 
   /// Connects to the paired sensor (or [deviceId]) and syncs once ready.
@@ -170,18 +237,87 @@ class SyncService extends ChangeNotifier {
       return;
     }
     _syncOnReady = true;
+    if (dc.connection == PolarConnectionState.connecting) return;
+    await _connect(id, reason);
+  }
+
+  Future<void> _connect(String id, String reason) async {
     _setPhase(
       SyncPhase.connecting,
       'Connecting to ${settings.pairedName ?? id}',
     );
-    await bridge.setAutomaticReconnection(true);
+    _log('info', 'connecting ($reason)');
+    await bridge.setAutomaticReconnection(liveRequested);
     try {
       await dc.connect(id);
+      _armConnectTimeout();
     } on PolarException catch (e) {
       _syncOnReady = false;
       _setPhase(SyncPhase.error, 'Connect failed: $e');
       _log('error', 'connect failed: $e');
-      _scheduleIdleCheck();
+      await _rest();
+    }
+  }
+
+  // ---- live session ---------------------------------------------------------
+
+  /// Connects (if needed) and streams HR to the dashboard until [stopLive].
+  Future<void> startLive() async {
+    final id = settings.pairedDeviceId;
+    if (id == null || liveRequested) return;
+    liveRequested = true;
+    notifyListeners();
+    _log('info', 'live started');
+    _idle?.cancel();
+    await bridge.serviceStart();
+    if (dc.isConnected && dc.deviceId == id) {
+      if (!_running) await _ensureLiveStreams();
+      return;
+    }
+    if (dc.connection == PolarConnectionState.connecting) return;
+    await _connect(id, 'live');
+  }
+
+  Future<void> _ensureLiveStreams() async {
+    if (_liveStarting || !liveRequested || !dc.isConnected) return;
+    _liveStarting = true;
+    try {
+      if (!dc.streams.containsKey(PolarDataType.hr)) {
+        await dc.startStream(PolarDataType.hr);
+      }
+      unawaited(
+        bridge.serviceNotification(
+          'Live · ${settings.pairedName ?? dc.deviceId}',
+          'Streaming heart rate to the dashboard',
+        ),
+      );
+    } catch (e) {
+      _log('warn', 'live HR: $e');
+    } finally {
+      _liveStarting = false;
+    }
+    unawaited(livePpi.reconcile());
+  }
+
+  /// Ends the live session: stops the streams, syncs so the graphs are
+  /// complete, and disconnects.
+  Future<void> stopLive({String reason = 'stopped'}) async {
+    if (!liveRequested) return;
+    liveRequested = false;
+    notifyListeners();
+    _log('info', 'live ended ($reason)');
+    if (dc.streams.containsKey(PolarDataType.hr)) {
+      try {
+        await dc.stopStream(PolarDataType.hr);
+      } catch (e) {
+        _log('warn', 'stop live HR: $e');
+      }
+    }
+    await livePpi.reconcile(); // hands PPI back to the sensor
+    if (dc.isConnected) {
+      await syncNow(reason: 'after live');
+    } else if (dc.connection == PolarConnectionState.connecting) {
+      await _rest();
     }
   }
 
@@ -197,7 +333,6 @@ class SyncService extends ChangeNotifier {
       return;
     }
     _running = true;
-    _rotation?.cancel();
     lastError = null;
     lastRunRecordings = 0;
     lastRunSamples = 0;
@@ -303,14 +438,6 @@ class SyncService extends ChangeNotifier {
     await _ensureTrigger(id);
     await _ensureRecording(id);
 
-    if (settings.liveHr && !dc.streams.containsKey(PolarDataType.hr)) {
-      try {
-        await dc.startStream(PolarDataType.hr);
-      } catch (e) {
-        _log('warn', 'live HR: $e');
-      }
-    }
-
     final removed = await repo.retention(days: settings.retentionDays);
     if (removed > 0) _log('info', 'retention removed $removed recordings');
   }
@@ -406,44 +533,58 @@ class SyncService extends ChangeNotifier {
   // ---- lifecycle ------------------------------------------------------------
 
   void _afterRun() {
-    unawaited(livePpi.reconcile());
-    if (dc.isConnected && settings.stayConnected) {
-      _rotation?.cancel();
-      final d = Duration(minutes: settings.rotationMinutes);
-      nextRotationAt = DateTime.now().add(d);
-      _rotation = Timer(d, () => unawaited(syncNow(reason: 'rotation')));
-      unawaited(
-        bridge.serviceNotification(
-          'Connected to ${settings.pairedName ?? dc.deviceId}',
-          'Last sync ${_fmtTime(lastSyncAt)}${lastError == null ? '' : ' · $lastError'}',
-        ),
-      );
-    } else if (dc.isConnected) {
-      unawaited(dc.disconnect());
+    if (_queued) {
+      // Another run follows at once; decide after it.
+    } else if (liveRequested && dc.isConnected) {
+      unawaited(_ensureLiveStreams());
+    } else if (dc.connection != PolarConnectionState.disconnected) {
+      unawaited(_rest());
+    } else {
+      unawaited(bridge.serviceIdle());
     }
     notifyListeners();
   }
 
+  /// Disconnects and releases the foreground service: nothing runs until
+  /// the next trigger. The sync result stays on the dashboard.
+  Future<void> _rest() async {
+    _connectTimeout?.cancel();
+    _idle?.cancel();
+    try {
+      await bridge.setAutomaticReconnection(false);
+      await dc.disconnect();
+    } catch (e) {
+      _log('warn', 'disconnect: $e');
+    }
+    await bridge.serviceIdle();
+    notifyListeners();
+  }
+
+  /// Fallback for disconnects we did not ask for: release the service once
+  /// nothing is pending.
   void _scheduleIdleCheck() {
     _idle?.cancel();
-    _idle = Timer(const Duration(minutes: 2), () async {
-      if (!_running && !dc.isConnected) {
-        _setPhase(
-          settings.isPaired ? SyncPhase.waitingForDevice : SyncPhase.idle,
-          '',
-        );
+    _idle = Timer(const Duration(seconds: 20), () async {
+      if (!_running && !dc.isConnected && !liveRequested) {
+        if (phase != SyncPhase.done && phase != SyncPhase.error) {
+          _setPhase(
+            settings.isPaired ? SyncPhase.waitingForDevice : SyncPhase.idle,
+            '',
+          );
+        }
         await bridge.serviceIdle();
       }
     });
   }
 
-  /// Disconnects and releases the foreground service.
+  /// The user's "Disconnect": ends a live session without the closing sync.
   Future<void> disconnect() async {
-    _rotation?.cancel();
-    nextRotationAt = null;
     _syncOnReady = false;
-    await dc.disconnect();
-    await bridge.serviceIdle();
+    if (liveRequested) {
+      liveRequested = false;
+      _log('info', 'live ended (disconnect)');
+    }
+    await _rest();
     _setPhase(SyncPhase.idle, '');
   }
 
@@ -478,8 +619,6 @@ class SyncService extends ChangeNotifier {
 
   static String _fmt(DateTime d) =>
       '${d.year}-${_two(d.month)}-${_two(d.day)} ${_two(d.hour)}:${_two(d.minute)}';
-  static String _fmtTime(DateTime? d) =>
-      d == null ? 'never' : '${_two(d.hour)}:${_two(d.minute)}';
   static String _two(int v) => v.toString().padLeft(2, '0');
   static String _kb(int bytes) => bytes < 1024
       ? '$bytes B'
@@ -491,7 +630,8 @@ class SyncService extends ChangeNotifier {
   void dispose() {
     _events.cancel();
     dc.removeListener(_onDeviceChanged);
-    _rotation?.cancel();
+    settings.removeListener(_onSettings);
+    _connectTimeout?.cancel();
     _idle?.cancel();
     super.dispose();
   }

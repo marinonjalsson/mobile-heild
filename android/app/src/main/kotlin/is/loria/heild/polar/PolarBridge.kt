@@ -14,6 +14,7 @@ import `is`.loria.heild.polar.Mappers.str
 import `is`.loria.heild.polar.Mappers.strOrNull
 import `is`.loria.heild.ActivityHolder
 import `is`.loria.heild.service.HeildService
+import `is`.loria.heild.service.SyncSchedule
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -40,6 +41,9 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val events = PolarEvents(messenger)
+
+    /** Sends an app-level event to Dart on the SDK event channel. */
+    fun appEvent(type: String) = events.app(type)
     private val streams = StreamChannels(messenger, scope)
     private val methods = MethodChannel(messenger, "heild/polar")
 
@@ -231,6 +235,8 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
 
             // ---- heild service & companion device (app code, not SDK) ---------
             "serviceStart" -> { HeildService.start(appContext); result.success(null) }
+            "scheduleSync" -> { SyncSchedule.set(appContext, a.int("hours")); result.success(null) }
+            "scheduleSyncIn" -> { SyncSchedule.fireIn(appContext, a.int("seconds")); result.success(null) }
             "serviceIdle" -> { HeildService.instance?.stop(); result.success(null) }
             "serviceNotification" -> {
                 HeildService.instance?.updateNotification(a.str("title"), a.str("text"))

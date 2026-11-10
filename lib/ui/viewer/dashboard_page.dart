@@ -132,39 +132,30 @@ class _SensorCard extends StatelessWidget {
                 : sync.progressPercent! / 100,
           ),
         ],
-        if (sync.nextRotationAt != null && !busy)
+        if (!busy)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              'Next sync ${fmtTime.format(sync.nextRotationAt!)}'
+              '${settings.syncEveryHours == 0 ? 'No scheduled sync' : 'Syncs every ${settings.syncEveryHours} h'}'
+              ' and when you open the app'
               '${sync.diskSpace == null ? '' : ' · sensor free ${formatBytes(sync.diskSpace!.freeSpace)}'}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         const SizedBox(height: 8),
         ButtonRow([
-          if (dc.isConnected)
-            FilledButton.icon(
-              onPressed: busy
-                  ? null
-                  : () => runAction(
-                      context,
-                      () => sync.syncNow(reason: 'manual'),
-                    ),
-              icon: const Icon(Icons.sync),
-              label: const Text('Sync now'),
-            )
-          else
-            FilledButton.icon(
-              onPressed: dc.connection == PolarConnectionState.connecting
-                  ? null
-                  : () => runAction(
-                      context,
-                      () => sync.connectAndSync(reason: 'manual'),
-                    ),
-              icon: const Icon(Icons.bluetooth_connected),
-              label: const Text('Connect & sync'),
-            ),
+          FilledButton.icon(
+            onPressed: busy || dc.connection == PolarConnectionState.connecting
+                ? null
+                : () => runAction(
+                    context,
+                    () => dc.isConnected
+                        ? sync.syncNow(reason: 'manual')
+                        : sync.connectAndSync(reason: 'manual'),
+                  ),
+            icon: const Icon(Icons.sync),
+            label: const Text('Sync now'),
+          ),
           if (dc.connection != PolarConnectionState.disconnected)
             TextButton(
               onPressed: () => runAction(context, sync.disconnect),
@@ -176,7 +167,9 @@ class _SensorCard extends StatelessWidget {
   }
 }
 
-/// The current heart rate with freshness cues.
+/// The current heart rate with freshness cues, during a live session only:
+/// "Live" connects and streams, "Stop" (or leaving the app) ends it with a
+/// sync and disconnects.
 ///
 /// With the live PP-interval stream on (app open, connected), the pulse state
 /// comes from real beats: the dot lights on each batch with a good beat, the
@@ -280,10 +273,11 @@ class _LiveHrCardState extends State<_LiveHrCard>
   @override
   Widget build(BuildContext context) {
     final dc = widget.dc;
+    final sync = appController.sync;
     final scheme = Theme.of(context).colorScheme;
     final small = Theme.of(context).textTheme.bodySmall;
-    final active = dc.streams[PolarDataType.hr];
-    final s = _current();
+    final live = sync.isLive;
+    final s = live ? _current() : null;
     final now = DateTime.now();
     final age = _lastDataAt == null ? null : now.difference(_lastDataAt!);
     final unchanged = _lastChangeAt == null
@@ -322,24 +316,36 @@ class _LiveHrCardState extends State<_LiveHrCard>
             child: Icon(Icons.circle, size: 10, color: scheme.primary),
           ),
           const SizedBox(width: 12),
-          active == null
+          live
               ? TextButton(
-                  onPressed: () => runAction(
-                    context,
-                    () => dc.startStream(PolarDataType.hr),
-                  ),
-                  child: const Text('Start'),
-                )
-              : TextButton(
-                  onPressed: () =>
-                      runAction(context, () => dc.stopStream(PolarDataType.hr)),
+                  onPressed: () => runAction(context, sync.stopLive),
                   child: const Text('Stop'),
+                )
+              : FilledButton.tonalIcon(
+                  onPressed: !appController.settings.isPaired
+                      ? null
+                      : () => runAction(context, sync.startLive),
+                  icon: const Icon(Icons.favorite, size: 18),
+                  label: const Text('Live'),
                 ),
         ],
       ),
       children: [
-        if (s == null)
-          const Text('Waiting for the first beat…')
+        if (!live)
+          Text(
+            'Tap Live to connect and watch your pulse. It stops when you '
+            'leave the app, and syncs the sensor on the way out.',
+            style: small,
+          )
+        else if (s == null)
+          Text(
+            dc.isConnected
+                ? 'Waiting for the first beat…'
+                : dc.connection == PolarConnectionState.connecting
+                ? 'Connecting to the sensor…'
+                : 'Sensor not reachable',
+            style: small,
+          )
         else ...[
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,

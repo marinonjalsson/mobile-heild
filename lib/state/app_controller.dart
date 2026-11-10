@@ -44,6 +44,7 @@ class AppController extends ChangeNotifier {
     liveHr = LiveHrService(device, repo);
     sync = SyncService(device.bridge, device, repo, settings, livePpi, liveHr);
     livePpi.syncBusy = () => sync.isRunning;
+    livePpi.liveWanted = () => sync.isLive;
     livePpi.dataChanged = sync.dataChanged;
     liveHr.dataChanged = sync.dataChanged;
     settings.addListener(notifyListeners);
@@ -54,15 +55,19 @@ class AppController extends ChangeNotifier {
     // stream and record them at once, and an unplanned disconnect in the
     // background would otherwise leave no PPI recording running.
     _lifecycle = AppLifecycleListener(
-      onStateChange: (s) => livePpi.foreground = _isForeground(s),
+      onStateChange: (s) {
+        final fg = _isForeground(s);
+        livePpi.foreground = fg;
+        sync.onForeground(fg);
+      },
     );
     livePpi.foreground = _isForeground(WidgetsBinding.instance.lifecycleState);
     _ready = true;
     notifyListeners();
-    if (settings.isPaired && settings.autoSync) {
-      // A paired sensor that is already on and in range will not produce a
-      // CDM "appeared" event, so start looking for it right away. The SDK's
-      // connect waits for the advertisement without a continuous scan.
+    unawaited(sync.applySchedule());
+    if (settings.isPaired) {
+      // Connect, sync, disconnect. The connect attempt gives up after
+      // SyncService.connectTimeout when the sensor is off or away.
       unawaited(sync.connectAndSync(reason: 'app start'));
     }
   }

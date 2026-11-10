@@ -51,6 +51,9 @@ class PolarEvents(messenger: BinaryMessenger) : PolarBleApiCallbackProvider, Eve
         }
     }
 
+    /** App-level events (not from the SDK), e.g. `scheduledSync` from the alarm. */
+    fun app(type: String) = emit(type)
+
     override fun blePowerStateChanged(powered: Boolean) = emit("blePowerState", "powered" to powered)
 
     override fun deviceConnected(polarDeviceInfo: PolarDeviceInfo) =

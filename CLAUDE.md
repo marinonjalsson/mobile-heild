@@ -43,19 +43,28 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - Sensor side: `FEATURE_COMPANION_DEVICE_MANAGEMENT` is on, so the SDK runs the Companion Device Manager association on the
   first `connectToDevice` (system dialog) and observes presence afterwards. Trigger `TRIGGER_SYSTEM_START` records the configured
   types whenever the sensor is switched on. HR is the only type that can be live-streamed while also recorded.
+- **No standing connection** (decided 2026-11-10 after a day of drain): every trigger connects, syncs and disconnects
+  (`SyncService._rest`: auto-reconnect off, disconnect, `serviceIdle`). Triggers: the schedule (Kotlin `SyncSchedule`
+  alarm, `setAndAllowWhileIdle`, re-armed on each fire and after boot; `HeildService` started with the `sync` extra sends
+  the app event `scheduledSync` to Dart), app start, app coming to the foreground with data older than 30 min, "Sync now",
+  and optionally presence (`autoSync`, off by default). A connect attempt gives up after `connectTimeout` (90 s) so the
+  SDK never scans for an absent sensor for long.
 - One sync round (`SyncService._run`): set clock → stop running recordings → list → fetch packed → `Repository.storeRecording` →
-  delete on sensor → ensure trigger + restart recordings → live HR → retention. Triggered by presence, app start, "Sync now",
-  rotation timer while connected. Never fatal: errors are logged to `sync_log` and retried on the next trigger.
+  delete on sensor → ensure trigger + restart recordings → retention. Never fatal: errors are logged to `sync_log` and
+  retried on the next trigger.
+- Live session (`SyncService.startLive/stopLive`, dashboard "Live" button): the only way to stay connected. Streams HR
+  (and PPI via `LivePpiService.liveWanted`) until Stop or the app leaves the foreground, then syncs and disconnects.
 - Service protocol (Dart → Kotlin): `serviceStart` before connecting, `serviceNotification(title, text)` on phase changes,
-  `serviceIdle` when disconnected with nothing pending (2-min grace). Kotlin starts the service itself on a presence event.
+  `serviceIdle` after every disconnect (20 s fallback for disconnects we did not ask for). Kotlin starts the service
+  itself on a presence event and on the sync alarm.
 - Storage: raw rows for HR/PPI, zlib int16 chunks per minute for ACC, `minute_stats` (per type and minute: n/mean/min/max/extra;
   extra = RMSSD for PPI, std |a| for ACC) feed every graph. Retention deletes recordings older than N days **only if `sent_ms` is set**.
 - Timestamps: Polar ns since 2000-01-01 in the sensor's *local* time → `polarNsToUnixMs` subtracts the phone zone offset.
   Offline HR has no stamps (1 Hz from start); PPI accumulates intervals when stamps are 0 (offline PPI stamps from the
   Verity Sense start in 2000 and are ignored).
-- Live PPI (`lib/state/live_ppi.dart`): while the app is in the foreground and connected, `LivePpiService` stops the sensor's
+- Live PPI (`lib/state/live_ppi.dart`): during a live session in the foreground, `LivePpiService` stops the sensor's
   PPI recording and streams PP intervals instead (the sensor cannot do both); samples are stamped on arrival and stored as a
-  `source = 'live'` recording that grows in place (flush every 60 s). Background → stream stops, PPI recording re-armed.
+  `source = 'live'` recording that grows in place (flush every 60 s). Session end → stream stops, PPI recording re-armed.
   `SyncService._ensureRecording` skips PPI while `livePpi.holdsPpi`; `_afterRun` calls `livePpi.reconcile()`. The dashboard's
   pulse state (good/poor/lost) comes from `blockerBit` + `errorEstimate ≤ 30 ms`, never from skin contact (unreliable on this
   sensor). Live HR samples carry nothing but the number, so without PPI the card falls back to "same value for 60 s = held".

@@ -175,6 +175,10 @@ class LivePpiService extends ChangeNotifier {
   /// The sync service is mid-run; starting a stream then would race it.
   bool Function() syncBusy = () => false;
 
+  /// The user asked for a live session (sync service); without one the
+  /// sensor keeps PPI for itself.
+  bool Function() liveWanted = () => false;
+
   /// Called after each successful flush (the viewers re-read).
   void Function() dataChanged = () {};
 
@@ -193,7 +197,8 @@ class LivePpiService extends ChangeNotifier {
       settings.livePpi &&
       settings.recordTypes.contains(PolarDataType.ppi) &&
       dc.isConnected &&
-      _foreground;
+      _foreground &&
+      liveWanted();
 
   /// True while a PPI stream is running (ours or started from the panel).
   bool get streaming => dc.streams.containsKey(PolarDataType.ppi);

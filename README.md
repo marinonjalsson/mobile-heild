@@ -18,29 +18,32 @@ Two milestones are in:
 - The sensor records **heart rate, PP intervals (HRV) and acceleration** into its own memory from
   the moment it is switched on (offline recording, trigger on power-on). Types, ACC rate/range and
   the sync interval are in Settings → Recording.
-- Each sync (sensor appears, app start, *Sync now*, or hourly while connected): set the clock, stop
-  the running recordings, fetch and store them, delete them from the sensor, re-arm the trigger and
-  start recording again. Everything is logged in Settings → Storage → Sync log. Errors are retried
-  on the next sync.
-- While the app is open and connected, PP intervals are **streamed to the phone** instead of being
-  recorded on the sensor (it cannot do both). Each beat carries a quality flag, so the dashboard can
-  say "pulse found / unclear / lost" and show live HRV, and the streamed beats are stored like any
-  recording (tagged *live*). When the app goes to the background the sensor records PP intervals
-  again. Switchable in Settings → Device. Known gap: if the connection drops while the app is open,
-  PP intervals resume only at reconnect or the next power-on; heart rate and acceleration are
-  unaffected.
+- The phone does **not** stay connected. It connects for a sync on a schedule (every 2 h by
+  default, Settings → Recording), when you open the app with data older than 30 min, on *Sync now*,
+  and optionally when the sensor comes into range (Settings → Device); then it disconnects and
+  rests. A connect attempt gives up after 90 s if the sensor is off or away.
+- Each sync: set the clock, stop the running recordings, fetch and store them, delete them from the
+  sensor, re-arm the trigger and start recording again. Everything is logged in Settings → Storage →
+  Sync log. Errors are retried on the next sync.
+- **Live** (dashboard button) is one tap away: the phone connects and streams the heart rate, and
+  PP intervals are **streamed to the phone** instead of being recorded on the sensor (it cannot do
+  both). Each beat carries a quality flag, so the dashboard can say "pulse found / unclear / lost"
+  and show live HRV; the streamed beats are stored like any recording (tagged *live*). *Stop* or
+  leaving the app ends the session with a sync, and the sensor records PP intervals again. Known
+  gap: if the connection drops during a live session, PP intervals resume only at the next sync or
+  power-on; heart rate and acceleration are unaffected.
 - The live heart-rate number alone cannot show whether the sensor still sees your pulse: the Verity
   Sense repeats its last value when it loses it. Without live PP intervals the dashboard treats a
   value unchanged for 60 s as held and says so.
-- A foreground-service notification ("heild · Connected to …") is shown while the phone talks to
-  the sensor; it goes away two minutes after the sensor disconnects.
+- A foreground-service notification ("heild · …") is shown only while the phone talks to the
+  sensor.
 - Storage on the phone: raw HR/PPI rows, per-minute compressed ACC chunks, and per-minute stats
   (mean/min/max, RMSSD for PPI, movement = std |a| for ACC) that feed the graphs. Graphs cover
   1 h / 6 h / day / week / month windows; a two-finger pinch zooms the time axis further (one finger
-  scrolls the page), and the time labels tighten as you zoom. The graphs are live: while the app
-  is connected, the heart rate and (in the foreground) the PP intervals streamed to the phone are
-  stored once a minute, so the charts show the last minutes before any sync. The sensor's own HR
-  recording replaces the live copy of the same seconds when it is fetched. Recordings older
+  scrolls the page), and the time labels tighten as you zoom. During a live session the heart
+  rate and PP intervals streamed to the phone are stored once a minute, so the charts show them
+  right away. The sensor's own HR recording replaces the live copy of the same seconds when it is
+  fetched. Recordings older
   than 30 days (configurable) are deleted **only once marked as sent to mon**; until MQTT export
   exists, the mark is a manual toggle on each recording.
 

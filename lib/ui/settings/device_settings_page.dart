@@ -151,40 +151,54 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                 ],
               ),
               Section(
-                title: 'Automatic connection',
+                title: 'Connection',
                 children: [
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'The phone connects for a sync on the schedule (Settings), '
+                      'when you open the app, on "Sync now" and for a live '
+                      'session; it disconnects afterwards.',
+                    ),
+                  ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text(
-                      'Connect and sync when the sensor appears',
+                      'Also sync when the sensor comes into range',
+                    ),
+                    subtitle: const Text(
+                      'Android wakes heild when the sensor is switched on nearby',
                     ),
                     value: s.autoSync,
                     onChanged: s.setAutoSync,
                   ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Stay connected while in range'),
-                    subtitle: const Text(
-                      'Live heart rate and periodic syncs; otherwise disconnect after each sync',
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => runAction(context, () async {
+                        await app.device.bridge.scheduleSyncIn(30);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Scheduled sync fires in 30 s. Leave the app to test '
+                                'the background path; see the sync log.',
+                              ),
+                            ),
+                          );
+                        }
+                      }),
+                      icon: const Icon(Icons.alarm),
+                      label: const Text('Test the scheduled sync (30 s)'),
                     ),
-                    value: s.stayConnected,
-                    onChanged: s.setStayConnected,
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Live heart rate on the dashboard'),
-                    value: s.liveHr,
-                    onChanged: s.setLiveHr,
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text(
-                      'Live pulse quality while the app is open',
-                    ),
+                    title: const Text('Pulse quality during a live session'),
                     subtitle: const Text(
                       'Streams PP intervals to the phone (stored here) instead of '
                       'recording them on the sensor; the sensor records them again '
-                      'when the app goes to the background.',
+                      'when the session ends.',
                     ),
                     value: s.livePpi,
                     onChanged: s.setLivePpi,

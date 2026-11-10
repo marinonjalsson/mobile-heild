@@ -111,18 +111,20 @@ class _RecordingSection extends StatelessWidget {
           ),
         Row(
           children: [
-            const Expanded(child: Text('Sync while connected every')),
+            const Expanded(
+              child: Text('Scheduled sync (connect, fetch, disconnect)'),
+            ),
             DropdownButton<int>(
-              value: s.rotationMinutes,
-              items: const [15, 30, 60, 120, 240]
+              value: s.syncEveryHours,
+              items: const [0, 1, 2, 4, 8, 12, 24]
                   .map(
                     (v) => DropdownMenuItem(
                       value: v,
-                      child: Text(v < 60 ? '$v min' : '${v ~/ 60} h'),
+                      child: Text(v == 0 ? 'Off' : 'every $v h'),
                     ),
                   )
                   .toList(),
-              onChanged: (v) => v == null ? null : s.setRotationMinutes(v),
+              onChanged: (v) => v == null ? null : s.setSyncEveryHours(v),
             ),
           ],
         ),

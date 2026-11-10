@@ -24,18 +24,14 @@ class AppSettings extends ChangeNotifier {
   int accRateHz = 26;
   int accRangeG = 8;
 
-  /// Minutes between "stop, fetch, restart" rounds while connected.
-  int rotationMinutes = 60;
+  /// Hours between scheduled syncs (connect, fetch, disconnect); 0 = off.
+  int syncEveryHours = 2;
   int retentionDays = 30;
 
-  /// Connect and sync whenever the sensor appears.
-  bool autoSync = true;
-
-  /// Keep the BLE connection while the sensor is in range (live HR, rotation).
-  bool stayConnected = true;
-
-  /// Start a live HR stream after each sync for the dashboard.
-  bool liveHr = true;
+  /// Also connect and sync whenever the sensor comes into range (Companion
+  /// Device Manager wake). Off by default: the schedule, opening the app and
+  /// "Sync now" are the triggers.
+  bool autoSync = false;
 
   /// While the app is open and connected, stream PP intervals to the phone
   /// (pulse quality on the dashboard) instead of recording them on the sensor.
@@ -55,14 +51,11 @@ class AppSettings extends ChangeNotifier {
     }
     accRateHz = int.tryParse(await _repo.getSetting('acc_rate_hz') ?? '') ?? 26;
     accRangeG = int.tryParse(await _repo.getSetting('acc_range_g') ?? '') ?? 8;
-    rotationMinutes =
-        int.tryParse(await _repo.getSetting('rotation_minutes') ?? '') ?? 60;
+    syncEveryHours =
+        int.tryParse(await _repo.getSetting('sync_every_hours') ?? '') ?? 2;
     retentionDays =
         int.tryParse(await _repo.getSetting('retention_days') ?? '') ?? 30;
-    autoSync = (await _repo.getSetting('auto_sync') ?? 'true') == 'true';
-    stayConnected =
-        (await _repo.getSetting('stay_connected') ?? 'true') == 'true';
-    liveHr = (await _repo.getSetting('live_hr') ?? 'true') == 'true';
+    autoSync = (await _repo.getSetting('auto_sync') ?? 'false') == 'true';
     livePpi = (await _repo.getSetting('live_ppi') ?? 'true') == 'true';
     notifyListeners();
   }
@@ -102,9 +95,9 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setRotationMinutes(int minutes) async {
-    rotationMinutes = minutes;
-    await _repo.setSetting('rotation_minutes', '$minutes');
+  Future<void> setSyncEveryHours(int hours) async {
+    syncEveryHours = hours;
+    await _repo.setSetting('sync_every_hours', '$hours');
     notifyListeners();
   }
 
@@ -117,18 +110,6 @@ class AppSettings extends ChangeNotifier {
   Future<void> setAutoSync(bool v) async {
     autoSync = v;
     await _repo.setSetting('auto_sync', '$v');
-    notifyListeners();
-  }
-
-  Future<void> setStayConnected(bool v) async {
-    stayConnected = v;
-    await _repo.setSetting('stay_connected', '$v');
-    notifyListeners();
-  }
-
-  Future<void> setLiveHr(bool v) async {
-    liveHr = v;
-    await _repo.setSetting('live_hr', '$v');
     notifyListeners();
   }
 

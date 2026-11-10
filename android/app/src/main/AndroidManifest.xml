@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Scheduled sync: the alarm is re-armed after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <application
@@ -47,6 +49,12 @@
             android:name=".service.HeildService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <receiver android:name=".service.SyncAlarmReceiver" android:exported="false" />
+        <receiver android:name=".service.BootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <!-- Our presence service replaces the SDK's so the process can start the foreground
              service and the Flutter engine before the event reaches Dart. -->
         <service

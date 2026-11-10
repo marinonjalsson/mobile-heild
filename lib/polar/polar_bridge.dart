@@ -137,6 +137,15 @@ class PolarBridge {
   Future<void> serviceNotification(String title, String text) =>
       _call<void>('serviceNotification', {'title': title, 'text': text});
 
+  /// Arms the scheduled sync alarm every [hours] hours (0 switches it off).
+  /// When it fires, Kotlin starts the service and sends `scheduledSync`.
+  Future<void> scheduleSync(int hours) =>
+      _call<void>('scheduleSync', {'hours': hours});
+
+  /// Debug: fires the sync alarm once after [seconds].
+  Future<void> scheduleSyncIn(int seconds) =>
+      _call<void>('scheduleSyncIn', {'seconds': seconds});
+
   /// BT addresses the Companion Device Manager has associated with this app.
   Future<List<String>> companionAssociatedAddresses() =>
       _callStrings('companionAssociatedAddresses');

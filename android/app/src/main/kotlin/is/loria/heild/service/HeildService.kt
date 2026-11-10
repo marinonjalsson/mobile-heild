@@ -30,8 +30,13 @@ class HeildService : Service() {
         var instance: HeildService? = null
             private set
 
-        fun start(context: Context) {
-            context.startForegroundService(Intent(context, HeildService::class.java))
+        const val EXTRA_SYNC = "sync"
+
+        /** [sync]: the schedule fired; Dart is told once the engine is up. */
+        fun start(context: Context, sync: Boolean = false) {
+            context.startForegroundService(
+                Intent(context, HeildService::class.java).putExtra(EXTRA_SYNC, sync),
+            )
         }
     }
 
@@ -57,7 +62,11 @@ class HeildService : Service() {
             buildNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
-        return START_STICKY
+        if (intent?.getBooleanExtra(EXTRA_SYNC, false) == true) {
+            // Buffered on the Kotlin side until Dart subscribes, so a cold engine is fine.
+            EngineHolder.bridge?.appEvent("scheduledSync")
+        }
+        return START_NOT_STICKY
     }
 
     fun updateNotification(title: String, text: String) {
