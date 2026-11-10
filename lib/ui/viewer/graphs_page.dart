@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../data/repository.dart';
 import '../../main.dart';
 import '../../polar/models.dart';
 import '../../state/device_controller.dart';
+import '../../state/sync_service.dart';
 import '../widgets/common.dart';
 import 'chart.dart';
 import 'format.dart';
@@ -20,6 +23,44 @@ class GraphsPage extends StatefulWidget {
 }
 
 class _GraphsPageState extends State<GraphsPage> {
+  /// "Disconnected" stays on the status line this long after a sync ends.
+  static const _endingFor = Duration(seconds: 3);
+
+  bool _wasActive = false;
+  bool _ending = false;
+  Timer? _endTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    appController.sync.addListener(_onSync);
+  }
+
+  @override
+  void dispose() {
+    appController.sync.removeListener(_onSync);
+    _endTimer?.cancel();
+    super.dispose();
+  }
+
+  /// A sync or connect in progress (the status line is shown, Sync disabled).
+  static bool _active(SyncService sync, DeviceController dc) =>
+      sync.isRunning ||
+      sync.phase == SyncPhase.connecting ||
+      dc.connection == PolarConnectionState.connecting;
+
+  void _onSync() {
+    final active = _active(appController.sync, appController.device);
+    if (_wasActive && !active) {
+      _endTimer?.cancel();
+      _ending = true;
+      _endTimer = Timer(_endingFor, () {
+        if (mounted) setState(() => _ending = false);
+      });
+    }
+    _wasActive = active;
+  }
+
   PolarDataType _type = PolarDataType.hr;
   _Range _range = _Range.day;
 
@@ -154,20 +195,27 @@ class _GraphsPageState extends State<GraphsPage> {
     final sync = appController.sync;
     final dc = appController.device;
     return ListenableBuilder(
-      listenable: sync,
+      listenable: Listenable.merge([sync, dc]),
       builder: (context, _) {
-        final busy = sync.isRunning;
-        final connecting = dc.connection == PolarConnectionState.connecting;
+        final busy = _active(sync, dc) || _ending;
+        final connecting = !sync.isRunning && _active(sync, dc);
+        final status = _ending && !_active(sync, dc)
+            ? 'Disconnected'
+            : connecting
+            ? 'Connecting…'
+            : sync.detail;
         return Scaffold(
           appBar: AppBar(
             title: Text(_header(_type)),
-            bottom: busy || connecting
+            bottom: busy
                 ? PreferredSize(
                     preferredSize: const Size.fromHeight(28),
                     child: Column(
                       children: [
                         LinearProgressIndicator(
-                          value: sync.progressPercent == null
+                          value: _ending && !_active(sync, dc)
+                              ? 1
+                              : sync.progressPercent == null
                               ? null
                               : sync.progressPercent! / 100,
                         ),
@@ -176,7 +224,7 @@ class _GraphsPageState extends State<GraphsPage> {
                           child: Align(
                             alignment: Alignment.centerLeft,
                             child: Text(
-                              sync.detail,
+                              status,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodySmall,
@@ -255,28 +303,15 @@ class _GraphsPageState extends State<GraphsPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // The window: < date/time >, then the action bar.
-                  Row(
-                    children: [
-                      IconButton(
-                        onPressed: () => _shift(-1),
-                        icon: const Icon(Icons.chevron_left),
-                      ),
-                      Expanded(
-                        child: Text(
-                          _title,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: toMs > DateTime.now().millisecondsSinceEpoch
-                            ? null
-                            : () => _shift(1),
-                        icon: const Icon(Icons.chevron_right),
-                      ),
-                    ],
+                  // The window: < date/time >, styled like the rows below.
+                  _DateRow(
+                    title: _title,
+                    onPrev: () => _shift(-1),
+                    onNext: toMs > DateTime.now().millisecondsSinceEpoch
+                        ? null
+                        : () => _shift(1),
                   ),
+                  // Action bar: the time window group, then the commands.
                   _BarRow<_Range>(
                     items: const [
                       (_Range.hour, '1 h'),
@@ -294,7 +329,7 @@ class _GraphsPageState extends State<GraphsPage> {
                       ),
                       _BarAction(
                         'Sync',
-                        busy || connecting || !appController.settings.isPaired
+                        busy || !appController.settings.isPaired
                             ? null
                             : () => runAction(
                                 context,
@@ -460,6 +495,61 @@ class _BarRow<T> extends StatelessWidget {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The < date/time > row in the style of [_BarRow]: chevrons as commands at
+/// the action width, the window title in the row label style.
+class _DateRow extends StatelessWidget {
+  const _DateRow({
+    required this.title,
+    required this.onPrev,
+    required this.onNext,
+  });
+
+  final String title;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme.labelLarge;
+    Widget chevron(IconData icon, VoidCallback? onTap) => SizedBox(
+      width: 58,
+      child: InkWell(
+        onTap: onTap,
+        child: Center(
+          child: Icon(
+            icon,
+            size: 22,
+            color: onTap == null ? scheme.outline : scheme.primary,
+          ),
+        ),
+      ),
+    );
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          chevron(Icons.chevron_left, onPrev),
+          Expanded(
+            child: Center(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: text?.copyWith(
+                  color: scheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          chevron(Icons.chevron_right, onNext),
         ],
       ),
     );
