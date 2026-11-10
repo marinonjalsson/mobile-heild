@@ -15,7 +15,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  int _index = 0;
+  /// Graphs first: that is what the app is for day to day.
+  int _index = 1;
 
   @override
   Widget build(BuildContext context) {

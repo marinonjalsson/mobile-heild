@@ -18,6 +18,9 @@ Two milestones are in:
 - The sensor records **heart rate, PP intervals (HRV) and acceleration** into its own memory from
   the moment it is switched on (offline recording, trigger on power-on). Types, ACC rate/range and
   the sync interval are in Settings → Recording.
+- The app opens on the Graphs tab: a header per type (Heart rate · Pulse intervals/HRV · Movement),
+  type and range controls above the navigation bar, "Now" and "Sync now" in the top bar, and a
+  progress line while a sync runs; each fetched recording shows up in the chart as it lands.
 - The phone does **not** stay connected. It connects for a sync on a schedule (every 2 h by
   default, Settings → Recording), when you open the app with data older than 30 min, on *Sync now*,
   and optionally when the sensor comes into range (Settings → Device); then it disconnects and

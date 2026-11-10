@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../data/repository.dart';
 import '../../main.dart';
 import '../../polar/models.dart';
+import '../../state/device_controller.dart';
+import '../widgets/common.dart';
 import 'chart.dart';
 import 'format.dart';
 
@@ -107,142 +109,228 @@ class _GraphsPageState extends State<GraphsPage> {
     'December',
   ][m - 1];
 
+  /// Segment label per type (short enough for three in a row).
+  static String _short(PolarDataType t) => switch (t) {
+    PolarDataType.hr => 'Heart rate',
+    PolarDataType.ppi => 'HRV',
+    PolarDataType.acc => 'Movement',
+    _ => t.label,
+  };
+
+  /// Header per type (the app bar title).
+  static String _header(PolarDataType t) => switch (t) {
+    PolarDataType.hr => 'Heart rate',
+    PolarDataType.ppi => 'Pulse intervals · HRV',
+    PolarDataType.acc => 'Movement',
+    _ => t.label,
+  };
+
+  // The stats query is cached per (type, window, data version) so that
+  // unrelated rebuilds (sync progress ticks) do not re-query, and the chart
+  // keeps showing the old buckets while the new ones load.
+  Object? _futureKey;
+  Future<List<StatBucket>>? _future;
+
+  Future<List<StatBucket>> _stats(int fromMs, int toMs, int version) {
+    final key = (_type, fromMs, toMs, _bucketMs, version);
+    if (key != _futureKey) {
+      _futureKey = key;
+      _future = appController.repo.stats(
+        _type,
+        fromMs,
+        toMs,
+        bucketMs: _bucketMs,
+        alignMs: fromMs,
+      );
+    }
+    return _future!;
+  }
+
   @override
   Widget build(BuildContext context) {
     final (from, to) = _window;
     final fromMs = from.millisecondsSinceEpoch;
     final toMs = to.millisecondsSinceEpoch;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Graphs'),
-        actions: [
-          TextButton(
-            onPressed: () => setState(() => _anchor = DateTime.now()),
-            child: const Text('Now'),
-          ),
-        ],
-      ),
-      body: ListenableBuilder(
-        listenable: appController.sync,
-        builder: (context, _) => ListView(
-          padding: const EdgeInsets.all(12),
-          children: [
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final t in viewerTypes)
-                  ChoiceChip(
-                    label: Text(t.label),
-                    selected: _type == t,
-                    onSelected: (_) => setState(() => _type = t),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            SegmentedButton<_Range>(
-              showSelectedIcon: false,
-              style: const ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                padding: WidgetStatePropertyAll(
-                  EdgeInsets.symmetric(horizontal: 6),
-                ),
+    final sync = appController.sync;
+    final dc = appController.device;
+    return ListenableBuilder(
+      listenable: sync,
+      builder: (context, _) {
+        final busy = sync.isRunning;
+        final connecting = dc.connection == PolarConnectionState.connecting;
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(_header(_type)),
+            actions: [
+              TextButton(
+                onPressed: () => setState(() => _anchor = DateTime.now()),
+                child: const Text('Now'),
               ),
-              segments: const [
-                ButtonSegment(value: _Range.hour, label: Text('1 h')),
-                ButtonSegment(value: _Range.sixHours, label: Text('6 h')),
-                ButtonSegment(value: _Range.day, label: Text('Day')),
-                ButtonSegment(value: _Range.week, label: Text('Week')),
-                ButtonSegment(value: _Range.month, label: Text('Month')),
-              ],
-              selected: {_range},
-              onSelectionChanged: (s) => setState(() => _range = s.first),
-            ),
-            Row(
-              children: [
-                IconButton(
-                  onPressed: () => _shift(-1),
-                  icon: const Icon(Icons.chevron_left),
-                ),
-                Expanded(
-                  child: Text(
-                    _title,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                IconButton(
-                  onPressed: toMs > DateTime.now().millisecondsSinceEpoch
-                      ? null
-                      : () => _shift(1),
-                  icon: const Icon(Icons.chevron_right),
-                ),
-              ],
-            ),
-            FutureBuilder<List<StatBucket>>(
-              key: ValueKey((
-                _type,
-                fromMs,
-                toMs,
-                appController.sync.dataVersion,
-              )),
-              future: appController.repo.stats(
-                _type,
-                fromMs,
-                toMs,
-                bucketMs: _bucketMs,
-                alignMs: fromMs,
+              IconButton(
+                tooltip: 'Sync now',
+                onPressed:
+                    busy || connecting || !appController.settings.isPaired
+                    ? null
+                    : () => runAction(
+                        context,
+                        () => dc.isConnected
+                            ? sync.syncNow(reason: 'manual')
+                            : sync.connectAndSync(reason: 'manual'),
+                      ),
+                icon: const Icon(Icons.sync),
               ),
-              builder: (context, snap) {
-                final b = snap.data;
-                if (b == null) return const LinearProgressIndicator();
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final panel in _panels(context, _type))
-                      Card(
-                        margin: const EdgeInsets.symmetric(vertical: 6),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 12, 16, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.only(left: 8),
-                                child: Text(
-                                  panel.title,
-                                  style: Theme.of(context).textTheme.titleSmall,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              StatChart(
-                                buckets: b,
-                                fromMs: fromMs,
-                                toMs: toMs,
-                                bucketMs: _bucketMs,
-                                field: panel.field,
-                                band: panel.band,
-                                unit: panel.unit,
-                                color: panel.color,
-                              ),
-                            ],
+            ],
+            bottom: busy || connecting
+                ? PreferredSize(
+                    preferredSize: const Size.fromHeight(28),
+                    child: Column(
+                      children: [
+                        LinearProgressIndicator(
+                          value: sync.progressPercent == null
+                              ? null
+                              : sync.progressPercent! / 100,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              sync.detail,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           ),
                         ),
+                      ],
+                    ),
+                  )
+                : null,
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(12),
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: () => _shift(-1),
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Expanded(
+                    child: Text(
+                      _title,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: toMs > DateTime.now().millisecondsSinceEpoch
+                        ? null
+                        : () => _shift(1),
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
+              FutureBuilder<List<StatBucket>>(
+                future: _stats(fromMs, toMs, sync.dataVersion),
+                builder: (context, snap) {
+                  final b = snap.data;
+                  if (b == null) return const LinearProgressIndicator();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final panel in _panels(context, _type))
+                        Card(
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 12, 16, 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: Text(
+                                    panel.title,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                StatChart(
+                                  buckets: b,
+                                  fromMs: fromMs,
+                                  toMs: toMs,
+                                  bucketMs: _bucketMs,
+                                  field: panel.field,
+                                  band: panel.band,
+                                  unit: panel.unit,
+                                  color: panel.color,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          '${b.length} buckets · ${b.fold<int>(0, (s, x) => s + x.n)} samples'
+                          '${sync.lastSyncAt == null ? '' : ' · synced ${fmtAgo(sync.lastSyncAt)}'}'
+                          ' · pinch with two fingers to zoom the time axis',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ),
-                    Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(
-                        '${b.length} buckets · ${b.fold<int>(0, (s, x) => s + x.n)} samples'
-                        ' · pinch with two fingers to zoom the time axis',
-                        style: Theme.of(context).textTheme.bodySmall,
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+          // The controls sit above the app's navigation bar.
+          bottomNavigationBar: Material(
+            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SegmentedButton<PolarDataType>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    segments: [
+                      for (final t in viewerTypes)
+                        ButtonSegment(value: t, label: Text(_short(t))),
+                    ],
+                    selected: {_type},
+                    onSelectionChanged: (s) => setState(() => _type = s.first),
+                  ),
+                  const SizedBox(height: 6),
+                  SegmentedButton<_Range>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      padding: WidgetStatePropertyAll(
+                        EdgeInsets.symmetric(horizontal: 6),
                       ),
                     ),
-                  ],
-                );
-              },
+                    segments: const [
+                      ButtonSegment(value: _Range.hour, label: Text('1 h')),
+                      ButtonSegment(value: _Range.sixHours, label: Text('6 h')),
+                      ButtonSegment(value: _Range.day, label: Text('Day')),
+                      ButtonSegment(value: _Range.week, label: Text('Week')),
+                      ButtonSegment(value: _Range.month, label: Text('Month')),
+                    ],
+                    selected: {_range},
+                    onSelectionChanged: (s) => setState(() => _range = s.first),
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 

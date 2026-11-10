@@ -429,6 +429,7 @@ class SyncService extends ChangeNotifier {
       }
       lastRunRecordings++;
       lastRunSamples += data.sampleCount;
+      dataVersion++; // the graphs pick up each recording as it lands
       _log('info', 'stored #$recId $label: ${data.sampleCount} samples');
       try {
         await bridge.removeOfflineRecord(id, e);
