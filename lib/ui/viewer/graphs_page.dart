@@ -161,25 +161,6 @@ class _GraphsPageState extends State<GraphsPage> {
         return Scaffold(
           appBar: AppBar(
             title: Text(_header(_type)),
-            actions: [
-              TextButton(
-                onPressed: () => setState(() => _anchor = DateTime.now()),
-                child: const Text('Now'),
-              ),
-              IconButton(
-                tooltip: 'Sync now',
-                onPressed:
-                    busy || connecting || !appController.settings.isPaired
-                    ? null
-                    : () => runAction(
-                        context,
-                        () => dc.isConnected
-                            ? sync.syncNow(reason: 'manual')
-                            : sync.connectAndSync(reason: 'manual'),
-                      ),
-                icon: const Icon(Icons.sync),
-              ),
-            ],
             bottom: busy || connecting
                 ? PreferredSize(
                     preferredSize: const Size.fromHeight(28),
@@ -305,6 +286,23 @@ class _GraphsPageState extends State<GraphsPage> {
                     ],
                     selected: _range,
                     onSelected: (r) => setState(() => _range = r),
+                    actions: [
+                      _BarAction(
+                        'Now',
+                        () => setState(() => _anchor = DateTime.now()),
+                      ),
+                      _BarAction(
+                        'Sync',
+                        busy || connecting || !appController.settings.isPaired
+                            ? null
+                            : () => runAction(
+                                context,
+                                () => dc.isConnected
+                                    ? sync.syncNow(reason: 'manual')
+                                    : sync.connectAndSync(reason: 'manual'),
+                              ),
+                      ),
+                    ],
                   ),
                   _BarRow<PolarDataType>(
                     items: [for (final t in viewerTypes) (t, _short(t))],
@@ -369,23 +367,36 @@ class _Panel {
   final Color? color;
 }
 
+/// A command in a [_BarRow]: text, tap, greyed when [onTap] is null.
+class _BarAction {
+  const _BarAction(this.label, this.onTap);
+  final String label;
+  final VoidCallback? onTap;
+}
+
 /// One selector row in the style of the navigation bar: equal-width text
-/// items, the selected one on a pill.
+/// items, the selected one on a pill. [actions] are commands grouped at
+/// the end behind a thin divider.
 class _BarRow<T> extends StatelessWidget {
   const _BarRow({
     required this.items,
     required this.selected,
     required this.onSelected,
+    this.actions = const [],
   });
 
   final List<(T, String)> items;
   final T selected;
   final ValueChanged<T> onSelected;
+  final List<_BarAction> actions;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme.labelLarge;
+    // Seven columns on a phone need the smaller label.
+    final text = actions.isEmpty
+        ? Theme.of(context).textTheme.labelLarge
+        : Theme.of(context).textTheme.labelMedium;
     return SizedBox(
       height: 48,
       child: Row(
@@ -397,8 +408,8 @@ class _BarRow<T> extends StatelessWidget {
                 child: Center(
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: actions.isEmpty ? 14 : 5,
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
@@ -419,6 +430,30 @@ class _BarRow<T> extends StatelessWidget {
                             ? FontWeight.w600
                             : FontWeight.w500,
                       ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (actions.isNotEmpty)
+            VerticalDivider(
+              width: 8,
+              indent: 12,
+              endIndent: 12,
+              color: scheme.outlineVariant,
+            ),
+          for (final a in actions)
+            SizedBox(
+              width: 58,
+              child: InkWell(
+                onTap: a.onTap,
+                child: Center(
+                  child: Text(
+                    a.label,
+                    maxLines: 1,
+                    style: text?.copyWith(
+                      color: a.onTap == null ? scheme.outline : scheme.primary,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
