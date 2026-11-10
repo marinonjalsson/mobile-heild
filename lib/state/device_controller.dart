@@ -80,6 +80,7 @@ class DeviceController extends ChangeNotifier {
 
   void log(String line) {
     final t = DateTime.now().toIso8601String().substring(11, 19);
+    debugPrint('heild $t $line');
     eventLog.insert(0, '$t  $line');
     if (eventLog.length > 300) eventLog.removeLast();
     notifyListeners();

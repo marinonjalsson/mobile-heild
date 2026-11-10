@@ -296,6 +296,10 @@ class SyncService extends ChangeNotifier {
     } finally {
       _liveStarting = false;
     }
+    _log(
+      'info',
+      'live HR streaming; PP intervals ${livePpi.wantsStream ? 'wanted' : 'not wanted'}',
+    );
     unawaited(livePpi.reconcile());
   }
 
