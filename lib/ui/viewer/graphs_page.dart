@@ -286,44 +286,30 @@ class _GraphsPageState extends State<GraphsPage> {
               ),
             ],
           ),
-          // The controls sit above the app's navigation bar.
+          // The controls sit above the app's navigation bar and look like
+          // it: full-width rows, a pill under the selected item, no icons.
           bottomNavigationBar: Material(
-            color: Theme.of(context).colorScheme.surfaceContainerLow,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            color: Theme.of(context).colorScheme.surfaceContainer,
+            child: SafeArea(
+              top: false,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SegmentedButton<PolarDataType>(
-                    showSelectedIcon: false,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    segments: [
-                      for (final t in viewerTypes)
-                        ButtonSegment(value: t, label: Text(_short(t))),
+                  _BarRow<_Range>(
+                    items: const [
+                      (_Range.hour, '1 h'),
+                      (_Range.sixHours, '6 h'),
+                      (_Range.day, 'Day'),
+                      (_Range.week, 'Week'),
+                      (_Range.month, 'Month'),
                     ],
-                    selected: {_type},
-                    onSelectionChanged: (s) => setState(() => _type = s.first),
+                    selected: _range,
+                    onSelected: (r) => setState(() => _range = r),
                   ),
-                  const SizedBox(height: 6),
-                  SegmentedButton<_Range>(
-                    showSelectedIcon: false,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      padding: WidgetStatePropertyAll(
-                        EdgeInsets.symmetric(horizontal: 6),
-                      ),
-                    ),
-                    segments: const [
-                      ButtonSegment(value: _Range.hour, label: Text('1 h')),
-                      ButtonSegment(value: _Range.sixHours, label: Text('6 h')),
-                      ButtonSegment(value: _Range.day, label: Text('Day')),
-                      ButtonSegment(value: _Range.week, label: Text('Week')),
-                      ButtonSegment(value: _Range.month, label: Text('Month')),
-                    ],
-                    selected: {_range},
-                    onSelectionChanged: (s) => setState(() => _range = s.first),
+                  _BarRow<PolarDataType>(
+                    items: [for (final t in viewerTypes) (t, _short(t))],
+                    selected: _type,
+                    onSelected: (t) => setState(() => _type = t),
                   ),
                 ],
               ),
@@ -381,4 +367,65 @@ class _Panel {
   final bool band;
   final String unit;
   final Color? color;
+}
+
+/// One selector row in the style of the navigation bar: equal-width text
+/// items, the selected one on a pill.
+class _BarRow<T> extends StatelessWidget {
+  const _BarRow({
+    required this.items,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final List<(T, String)> items;
+  final T selected;
+  final ValueChanged<T> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme.labelLarge;
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          for (final (value, label) in items)
+            Expanded(
+              child: InkWell(
+                onTap: () => onSelected(value),
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: value == selected
+                          ? scheme.secondaryContainer
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text?.copyWith(
+                        color: value == selected
+                            ? scheme.onSecondaryContainer
+                            : scheme.onSurfaceVariant,
+                        fontWeight: value == selected
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
