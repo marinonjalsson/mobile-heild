@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../online/upload_payload.dart' show uploadedWireTypes;
 import '../polar/models.dart';
 import '../polar/packed_recording.dart';
 import 'acc_codec.dart';
@@ -892,15 +893,35 @@ class Repository {
     ];
   }
 
-  /// Recordings not yet sent online (`sent_ms` unset). Live sessions do not
-  /// count: the sensor's own recording replaces them at the next sync.
+  /// What makes a recording one that online sync still has to send: not sent
+  /// (`sent_ms` unset), one of the types mon stores, and not a live session
+  /// — the sensor's own recording replaces those at the next sync.
+  static final _unsent =
+      "sent_ms IS NULL AND source != 'live' AND type IN "
+      "(${uploadedWireTypes.map((t) => "'$t'").join(', ')})";
+
   Future<int> unsentCount() async =>
       Sqflite.firstIntValue(
-        await db.rawQuery(
-          "SELECT COUNT(*) FROM recordings WHERE sent_ms IS NULL AND source != 'live'",
-        ),
+        await db.rawQuery('SELECT COUNT(*) FROM recordings WHERE $_unsent'),
       ) ??
       0;
+
+  /// The oldest recordings still to send, oldest first, leaving out the ids
+  /// in [except] (recordings mon has refused for good).
+  Future<List<RecordingRow>> unsentRecordings({
+    int limit = 20,
+    Set<int> except = const {},
+  }) async {
+    final rows = await db.query(
+      'recordings',
+      where: except.isEmpty
+          ? _unsent
+          : '$_unsent AND id NOT IN (${except.join(', ')})',
+      orderBy: 'start_ms',
+      limit: limit,
+    );
+    return rows.map(RecordingRow.fromMap).toList();
+  }
 
   Future<List<SyncLogRow>> syncLog({int limit = 200}) async {
     final rows = await db.query('sync_log', orderBy: 'id DESC', limit: limit);

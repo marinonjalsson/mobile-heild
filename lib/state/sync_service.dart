@@ -77,6 +77,11 @@ class SyncService extends ChangeNotifier {
   /// rebuild or a delete. Viewers key their queries on it.
   int dataVersion = 0;
 
+  /// Called after a sync round that finished without error. The app
+  /// controller hangs the online upload on it; this service knows nothing
+  /// about accounts or the network and must keep working without either.
+  VoidCallback? onSyncDone;
+
   /// Tells viewers that stored data changed outside a sync.
   void dataChanged() {
     dataVersion++;
@@ -393,6 +398,7 @@ class SyncService extends ChangeNotifier {
         'info',
         'sync done: $lastRunRecordings recordings, $lastRunSamples samples',
       );
+      onSyncDone?.call();
     } catch (e) {
       lastError = '$e';
       _setPhase(SyncPhase.error, '$e');

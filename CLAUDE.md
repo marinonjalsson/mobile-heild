@@ -5,8 +5,9 @@ Milestone 1: full control of the Polar Verity Sense via the **official Polar BLE
 Milestone 2: "wear it, forget it" — the sensor records HR/PPI/ACC on its own (offline recording,
 trigger on power-on); Android's Companion Device Manager wakes the app when the sensor is in range;
 the app syncs the recordings into SQLite and shows graphs/tables.
-Milestone 3 (in progress): optional Loria sign-in (done), then upload of the recordings to `mon` over HTTPS with the
-signed-in user's token. MQTT was abandoned (2026-11-11).
+Milestone 3: optional Loria sign-in, and upload of every recording (raw samples + minute stats) to `mon` over HTTPS
+with the signed-in user's token; mon shows each person their own data at `mon.loria.is/heild/`. MQTT was abandoned
+(2026-11-11).
 
 ## Layout
 
@@ -14,11 +15,13 @@ signed-in user's token. MQTT was abandoned (2026-11-11).
   (typed-array form of a fetched recording), `polar_errors.dart`. No UI here.
 - `lib/auth/` — the Loria sign-in, no UI: `oidc.dart` (`OidcConfig`, token/userinfo/revocation over plain HTTPS),
   `authorizer.dart` (the browser part, flutter_appauth), `token_store.dart` (refresh token in the Android Keystore).
+- `lib/online/` — the upload to mon, no UI: `upload_payload.dart` (`buildUpload`: one recording as mon takes it),
+  `mon_client.dart` (`POST /api/heild/upload`, `MonException`).
 - `lib/data/` — SQLite: `db.dart` (schema), `repository.dart` (ingest, minute stats, queries, retention),
   `polar_time.dart` (Polar ns since 2000 → Unix ms, HR/PPI timestamp derivation), `acc_codec.dart` (zlib int16 chunks).
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
-  `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `auth_controller.dart` (sign-in state, `accessToken()`), `app_controller.dart` (owns db/settings/sync/auth; global `appController` in `main.dart`).
-- `lib/ui/` — `home_page.dart` (Graphs / Device / Table / Online / Settings), `online/online_page.dart` (sign-in, account, history), `viewer/` (`dashboard_page.dart` = the Device tab:
+  `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `auth_controller.dart` (sign-in state, `accessToken()`), `online_sync.dart` (`OnlineSyncService`: sends unsent recordings), `app_controller.dart` (owns db/settings/sync/auth/online; global `appController` in `main.dart`).
+- `lib/ui/` — `home_page.dart` (Graphs / Device / Table / Online / Settings), `online/online_page.dart` (sign-in, account, online sync + Upload now, history), `viewer/` (`dashboard_page.dart` = the Device tab:
   sensor, sync, details, phone storage; `live_card.dart` the live cards shown on Graphs during a live session (HR card on
   Heart rate, PP-interval card on HRV);
   graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
@@ -100,7 +103,8 @@ signed-in user's token. MQTT was abandoned (2026-11-11).
 - **Optional.** The app never waits for a sign-in; only online sync needs one. Nothing in `SyncService` (the sensor
   sync) may depend on `AuthController`.
 - Identity provider: the Loria Authelia at `https://auth.loria.is` (repo `web/auth`), OIDC client `heild`: public,
-  PKCE S256, redirect `is.loria.heild:/oauthredirect`, scopes `openid profile email offline_access`. The redirect scheme
+  PKCE S256, redirect `is.loria.heild:/oauthredirect`, scopes `openid profile email groups offline_access`; signing in
+  needs the `heild_user` group (the client's authorization policy). The redirect scheme
   is in three places that must agree: `OidcConfig.redirectUrl`, `appAuthRedirectScheme` in `android/app/build.gradle.kts`,
   and the client's `redirect_uris` in `web/auth/config/configuration.yml`.
 - flutter_appauth is used only for the interactive part (Custom Tab → code → tokens). Refresh, userinfo and revocation
@@ -119,9 +123,25 @@ signed-in user's token. MQTT was abandoned (2026-11-11).
   `auth_email`, `auth_signed_in_ms`, `auth_expired`), access token in memory. `AuthStatus.expired` = the server refused
   the refresh token; the username is kept so the Online tab can ask that person to sign in again. No network is not
   expiry: the session is kept and `accessToken()` returns null with `lastError` set.
-- `online_log` (schema v4; kind `auth` | `push`, ok, message) is the history on the Online tab. The upload step writes
-  `push` rows and sets `recordings.sent_ms` (which is what retention waits for). `Repository.unsentCount()` is what waits.
-- Not built yet: the upload itself. mon's endpoint and how it checks the token are undecided.
+- `online_log` (schema v4; kind `auth` | `push`, ok, message) is the history on the Online tab.
+- **Upload** (`OnlineSyncService.run`): every recording with `sent_ms` unset, of type HR/PPI/ACC and not `source = 'live'`
+  (`Repository.unsentRecordings`), oldest first, one `POST https://mon.loria.is/api/heild/upload` each with
+  `Authorization: Bearer <access token>`; on 200 `markSent`, which is what retention waits for. Triggers: after each
+  sensor sync that finished (`SyncService.onSyncDone`), on sign-in, at app start, and "Upload now". Single run at a time.
+  `SyncService` knows nothing of it and must never wait for it.
+- The body (`buildUpload`) carries the recording, its raw samples as parallel lists (ACC as the zlib chunks, base64) and
+  the `minute_stats` rows of the minutes it covers. **It never names the person**: mon takes that from the token
+  (userinfo) and requires the `heild_user` group. The other end is `web/sites/mon/api/lib/heild.dart`; the two must
+  change together.
+- mon's answers are a contract: 200 sent; 400/413 this recording is refused for good (skipped for the life of the
+  process, logged, the rest still go); 401 refresh once and retry, then stop; 403 stop — not in the group, **or a session
+  from before the `groups` scope** (mon sees no groups in it; sign out and in once); anything else or no network: stop,
+  retry at the next trigger. One `push` history row per run that sent or failed something.
+- Not uploaded: live sessions (the sensor's own recording replaces them). A headless upload after a scheduled sync runs
+  only as long as the process lives after `serviceIdle`; whatever is cut short goes with the next run (uploads are
+  idempotent on mon).
+- Tested 2026-11-11 against a local mon + Authelia 4.39.14 with a real token: HR, PPI and ACC accepted, re-upload
+  idempotent, another member sees nothing of it.
 
 ## Build / run
 

@@ -13,7 +13,17 @@ class OidcConfig {
     this.issuer = 'https://auth.loria.is',
     this.clientId = 'heild',
     this.redirectUrl = 'is.loria.heild:/oauthredirect',
-    this.scopes = const ['openid', 'profile', 'email', 'offline_access'],
+    this.scopes = const [
+      'openid',
+      'profile',
+      'email',
+      // So that mon can see the heild_user group when it is shown the access
+      // token: it accepts uploads from members only. A session from before
+      // this scope was asked for has no groups in it and is refused there
+      // until the person signs in again.
+      'groups',
+      'offline_access',
+    ],
   });
 
   final String issuer;

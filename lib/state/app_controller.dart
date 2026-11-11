@@ -7,12 +7,14 @@ import '../auth/oidc.dart';
 import '../auth/token_store.dart';
 import '../data/db.dart';
 import '../data/repository.dart';
+import '../online/mon_client.dart';
 import '../polar/models.dart';
 import 'app_settings.dart';
 import 'auth_controller.dart';
 import 'device_controller.dart';
 import 'live_hr.dart';
 import 'live_ppi.dart';
+import 'online_sync.dart';
 import 'sync_service.dart';
 
 /// Owns the database, settings and the sync service. One instance per app,
@@ -31,6 +33,9 @@ class AppController extends ChangeNotifier {
 
   /// The optional Loria sign-in (Online tab). Only online sync depends on it.
   late final AuthController auth;
+
+  /// Upload of recordings to mon. Does nothing unless somebody is signed in.
+  late final OnlineSyncService online;
   AppLifecycleListener? _lifecycle;
 
   bool _ready = false;
@@ -69,6 +74,18 @@ class AppController extends ChangeNotifier {
         sync.isLive && sync.liveType == PolarDataType.ppi;
     livePpi.dataChanged = sync.dataChanged;
     liveHr.dataChanged = sync.dataChanged;
+    online = OnlineSyncService(repo, auth, MonClient())
+      ..dataChanged = sync.dataChanged;
+    // New recordings go online as soon as the sensor has handed them over,
+    // and whatever is waiting goes when somebody signs in.
+    sync.onSyncDone = () => unawaited(online.run(reason: 'after sync'));
+    var signedIn = auth.isSignedIn;
+    auth.addListener(() {
+      if (auth.isSignedIn && !signedIn) {
+        unawaited(online.run(reason: 'signed in'));
+      }
+      signedIn = auth.isSignedIn;
+    });
     settings.addListener(notifyListeners);
     sync.addListener(notifyListeners);
     livePpi.addListener(notifyListeners);
@@ -87,6 +104,8 @@ class AppController extends ChangeNotifier {
     _ready = true;
     notifyListeners();
     unawaited(sync.applySchedule());
+    // Whatever an earlier run left behind (no network, app closed mid-way).
+    unawaited(online.run(reason: 'app start'));
     if (settings.isPaired) {
       // Connect, sync, disconnect. The connect attempt gives up after
       // SyncService.connectTimeout when the sensor is off or away.
@@ -126,6 +145,7 @@ class AppController extends ChangeNotifier {
     livePpi.dispose();
     liveHr.dispose();
     sync.dispose();
+    online.dispose();
     auth.dispose();
     super.dispose();
   }

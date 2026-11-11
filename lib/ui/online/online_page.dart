@@ -193,30 +193,70 @@ class _Error extends StatelessWidget {
   }
 }
 
-/// What online sync is doing. Nothing is sent yet: the upload to mon is the
-/// next step, and this is where its state goes.
+/// What online sync is doing: how much is waiting, how the last run went,
+/// and a button to run it now.
 class _OnlineSync extends StatelessWidget {
   const _OnlineSync(this.auth);
   final AuthController auth;
 
   @override
   Widget build(BuildContext context) {
-    return _Loaded<int>(
-      // Re-read whenever a sensor sync or a live flush changed the data.
-      version: appController.sync.dataVersion,
-      load: appController.repo.unsentCount,
-      builder: (context, snap) => Section(
-        title: 'Online sync',
-        children: [
-          KeyValueList({
-            'Status': auth.isSignedIn
-                ? 'not sending yet (upload comes next)'
-                : 'stopped: sign in again',
-            'Waiting on this phone': snap.hasData
-                ? '${snap.data} recordings'
-                : '…',
-          }),
-        ],
+    final online = appController.online;
+    final theme = Theme.of(context);
+    return ListenableBuilder(
+      listenable: online,
+      builder: (context, _) => _Loaded<int>(
+        // Re-read when a sensor sync or a live flush changed the data, and
+        // as an upload works through the queue.
+        version: (appController.sync.dataVersion, online.done, online.running),
+        load: appController.repo.unsentCount,
+        builder: (context, snap) {
+          final at = online.lastRunAt;
+          return Section(
+            title: 'Online sync',
+            children: [
+              KeyValueList({
+                'Status': !auth.isSignedIn
+                    ? 'stopped: sign in again'
+                    : online.running
+                    ? 'sending ${online.done} of ${online.total}…'
+                    : 'sends after each sensor sync',
+                'Waiting on this phone': snap.hasData
+                    ? '${snap.data} recordings'
+                    : '…',
+                if (at != null) 'Last run': fmtAgo(at),
+                'Goes to': 'mon.loria.is/heild',
+              }),
+              if (online.running) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  value: online.total == 0 ? null : online.done / online.total,
+                ),
+              ],
+              if (online.lastMessage != null && !online.running)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    online.lastMessage!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: online.lastOk ? null : theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: online.running || !auth.isSignedIn
+                      ? null
+                      : () => online.run(reason: 'manual'),
+                  icon: const Icon(Icons.cloud_upload_outlined),
+                  label: const Text('Upload now'),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
