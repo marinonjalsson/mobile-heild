@@ -25,6 +25,10 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // The scheme of the sign-in redirect (flutter_appauth): the browser
+        // hands `is.loria.heild:/oauthredirect` back to this app. Must match
+        // OidcConfig.redirectUrl and the heild client in Authelia (web/auth).
+        manifestPlaceholders += mapOf("appAuthRedirectScheme" to "is.loria.heild")
     }
 
     buildTypes {

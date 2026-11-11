@@ -2,10 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../auth/authorizer.dart';
+import '../auth/oidc.dart';
+import '../auth/token_store.dart';
 import '../data/db.dart';
 import '../data/repository.dart';
 import '../polar/models.dart';
 import 'app_settings.dart';
+import 'auth_controller.dart';
 import 'device_controller.dart';
 import 'live_hr.dart';
 import 'live_ppi.dart';
@@ -24,6 +28,9 @@ class AppController extends ChangeNotifier {
   late final LivePpiService livePpi;
   late final LiveHrService liveHr;
   late final SyncService sync;
+
+  /// The optional Loria sign-in (Online tab). Only online sync depends on it.
+  late final AuthController auth;
   AppLifecycleListener? _lifecycle;
 
   bool _ready = false;
@@ -39,6 +46,20 @@ class AppController extends ChangeNotifier {
       final n = await repo.rebuildMinuteStats();
       await repo.setSetting(HeildDb.statsRebuildKey, '0');
       await repo.log('info', 'rebuilt statistics for $n minutes');
+    }
+    const oidc = OidcConfig();
+    auth = AuthController(
+      repo,
+      client: OidcClient(oidc),
+      store: const SecureTokenStore(),
+      authorizer: appAuthAuthorizer(oidc),
+    );
+    // Reads the settings table and the Keystore; no network. A failure here
+    // must never keep the sensor sync from starting.
+    try {
+      await auth.load();
+    } catch (e) {
+      await repo.log('warn', 'sign-in state not loaded: $e');
     }
     livePpi = LivePpiService(device.bridge, device, repo, settings);
     liveHr = LiveHrService(device, repo);
@@ -105,6 +126,7 @@ class AppController extends ChangeNotifier {
     livePpi.dispose();
     liveHr.dispose();
     sync.dispose();
+    auth.dispose();
     super.dispose();
   }
 }

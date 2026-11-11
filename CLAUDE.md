@@ -4,17 +4,21 @@ Flutter app (Android first). Long-term goal: help humans live healthy lives — 
 Milestone 1: full control of the Polar Verity Sense via the **official Polar BLE SDK**.
 Milestone 2: "wear it, forget it" — the sensor records HR/PPI/ACC on its own (offline recording,
 trigger on power-on); Android's Companion Device Manager wakes the app when the sensor is in range;
-the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` comes later.
+the app syncs the recordings into SQLite and shows graphs/tables.
+Milestone 3 (in progress): optional Loria sign-in (done), then upload of the recordings to `mon` over HTTPS with the
+signed-in user's token. MQTT was abandoned (2026-11-11).
 
 ## Layout
 
 - `lib/polar/` — Dart side of the SDK bridge. `polar_bridge.dart` (channels), `models.dart`, `packed_recording.dart`
   (typed-array form of a fetched recording), `polar_errors.dart`. No UI here.
+- `lib/auth/` — the Loria sign-in, no UI: `oidc.dart` (`OidcConfig`, token/userinfo/revocation over plain HTTPS),
+  `authorizer.dart` (the browser part, flutter_appauth), `token_store.dart` (refresh token in the Android Keystore).
 - `lib/data/` — SQLite: `db.dart` (schema), `repository.dart` (ingest, minute stats, queries, retention),
   `polar_time.dart` (Polar ns since 2000 → Unix ms, HR/PPI timestamp derivation), `acc_codec.dart` (zlib int16 chunks).
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
-  `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `app_controller.dart` (owns db/settings/sync; global `appController` in `main.dart`).
-- `lib/ui/` — `home_page.dart` (Graphs / Device / Table / Settings), `viewer/` (`dashboard_page.dart` = the Device tab:
+  `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `auth_controller.dart` (sign-in state, `accessToken()`), `app_controller.dart` (owns db/settings/sync/auth; global `appController` in `main.dart`).
+- `lib/ui/` — `home_page.dart` (Graphs / Device / Table / Online / Settings), `online/online_page.dart` (sign-in, account, history), `viewer/` (`dashboard_page.dart` = the Device tab:
   sensor, sync, details, phone storage; `live_card.dart` the live cards shown on Graphs during a live session (HR card on
   Heart rate, PP-interval card on HRV);
   graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
@@ -89,6 +93,29 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 - `minute_stats` is a pure function of the raw rows (`_recomputeMinutes`); schema upgrades that change a statistic set
   `HeildDb.statsRebuildKey` and the app controller rebuilds at start.
 
+## Sign-in & online sync (milestone 3)
+
+- **Optional.** The app never waits for a sign-in; only online sync needs one. Nothing in `SyncService` (the sensor
+  sync) may depend on `AuthController`.
+- Identity provider: the Loria Authelia at `https://auth.loria.is` (repo `web/auth`), OIDC client `heild`: public,
+  PKCE S256, redirect `is.loria.heild:/oauthredirect`, scopes `openid profile email offline_access`. The redirect scheme
+  is in three places that must agree: `OidcConfig.redirectUrl`, `appAuthRedirectScheme` in `android/app/build.gradle.kts`,
+  and the client's `redirect_uris` in `web/auth/config/configuration.yml`.
+- flutter_appauth is used only for the interactive part (Custom Tab → code → tokens). Refresh, userinfo and revocation
+  are plain HTTPS in `OidcClient`, so they run headless (scheduled upload) and are testable with `MockClient`.
+- Observed on Authelia 4.39.14 (local run, 2026-11-11): the ID token carries only an opaque `sub`, the username is
+  `preferred_username` from **userinfo**; refresh tokens **rotate** and the old one is refused with `invalid_grant`, so
+  `AuthController.accessToken()` is single-flight and stores the new refresh token before anything else; the consent page
+  shows on every sign-in (Authelia will not remember consent with `offline_access`).
+- Lifetimes (Authelia lifespan `app`): access token 1 h, refresh token 90 days, renewed on every use.
+- State: refresh token in `SecureTokenStore` (never in SQLite), profile in `settings` (`auth_username`, `auth_name`,
+  `auth_email`, `auth_signed_in_ms`, `auth_expired`), access token in memory. `AuthStatus.expired` = the server refused
+  the refresh token; the username is kept so the Online tab can ask that person to sign in again. No network is not
+  expiry: the session is kept and `accessToken()` returns null with `lastError` set.
+- `online_log` (schema v4; kind `auth` | `push`, ok, message) is the history on the Online tab. The upload step writes
+  `push` rows and sets `recordings.sent_ms` (which is what retention waits for). `Repository.unsentCount()` is what waits.
+- Not built yet: the upload itself. mon's endpoint and how it checks the token are undecided.
+
 ## Build / run
 
 - `minSdk 33`, `compileSdk 37` (permission_handler needs 37). JDK 21. Polar SDK 8.5.0 (`8.5.0-java17` exists if D8 complains).
@@ -99,4 +126,4 @@ the app syncs the recordings into SQLite and shows graphs/tables. MQTT to `mon` 
 
 ## Out of scope for now
 
-iOS, MQTT/export to mon (planned next), AES-secured recordings, H10/watch-only APIs.
+iOS, MQTT (abandoned; upload to mon is HTTPS, see milestone 3), AES-secured recordings, H10/watch-only APIs.

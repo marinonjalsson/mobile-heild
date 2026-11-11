@@ -120,6 +120,17 @@ class SyncLogRow {
   final String message;
 }
 
+/// Row of `online_log`: one sign-in event or one upload.
+class OnlineLogRow {
+  OnlineLogRow(this.tsMs, this.kind, this.ok, this.message);
+  final int tsMs;
+
+  /// `auth` (sign-in, sign-out, a refused refresh) or `push` (an upload).
+  final String kind;
+  final bool ok;
+  final String message;
+}
+
 /// All reads and writes of [HeildDb]. Ingest runs in one transaction per
 /// recording and maintains `minute_stats` so graphs never scan raw samples.
 class Repository {
@@ -847,6 +858,49 @@ class Repository {
       'DELETE FROM sync_log WHERE id NOT IN (SELECT id FROM sync_log ORDER BY id DESC LIMIT 2000)',
     );
   }
+
+  // ---- online log ------------------------------------------------------------
+
+  /// Sign-in and upload history, shown on the Online tab.
+  Future<void> onlineLog(
+    String kind,
+    String message, {
+    bool ok = true,
+    int? nowMs,
+  }) async {
+    await db.insert('online_log', {
+      'ts_ms': nowMs ?? DateTime.now().millisecondsSinceEpoch,
+      'kind': kind,
+      'ok': ok ? 1 : 0,
+      'message': message,
+    });
+    await db.rawDelete(
+      'DELETE FROM online_log WHERE id NOT IN (SELECT id FROM online_log ORDER BY id DESC LIMIT 1000)',
+    );
+  }
+
+  Future<List<OnlineLogRow>> onlineHistory({int limit = 100}) async {
+    final rows = await db.query('online_log', orderBy: 'id DESC', limit: limit);
+    return [
+      for (final m in rows)
+        OnlineLogRow(
+          m['ts_ms'] as int,
+          m['kind'] as String,
+          m['ok'] == 1,
+          m['message'] as String,
+        ),
+    ];
+  }
+
+  /// Recordings not yet sent online (`sent_ms` unset). Live sessions do not
+  /// count: the sensor's own recording replaces them at the next sync.
+  Future<int> unsentCount() async =>
+      Sqflite.firstIntValue(
+        await db.rawQuery(
+          "SELECT COUNT(*) FROM recordings WHERE sent_ms IS NULL AND source != 'live'",
+        ),
+      ) ??
+      0;
 
   Future<List<SyncLogRow>> syncLog({int limit = 200}) async {
     final rows = await db.query('sync_log', orderBy: 'id DESC', limit: limit);

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import 'online/online_page.dart';
 import 'settings/settings_page.dart';
 import 'viewer/dashboard_page.dart';
 import 'viewer/graphs_page.dart';
 import 'viewer/table_page.dart';
 
-/// Bottom navigation: Graphs first, then the device, the table, settings.
+/// Bottom navigation: Graphs first, then the device, the table, the online
+/// sign-in, settings.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -34,6 +36,7 @@ class _HomePageState extends State<HomePage> {
               GraphsPage(),
               DevicePage(),
               TablePage(),
+              OnlinePage(),
               SettingsPage(),
             ],
           ),
@@ -54,6 +57,11 @@ class _HomePageState extends State<HomePage> {
                 icon: Icon(Icons.table_rows_outlined),
                 selectedIcon: Icon(Icons.table_rows),
                 label: 'Table',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.cloud_outlined),
+                selectedIcon: Icon(Icons.cloud),
+                label: 'Online',
               ),
               NavigationDestination(
                 icon: Icon(Icons.settings_outlined),

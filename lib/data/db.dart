@@ -9,7 +9,7 @@ class HeildDb {
   final Database db;
   final String path;
 
-  static const version = 3;
+  static const version = 4;
 
   /// Settings key set by a schema upgrade when `minute_stats` must be rebuilt
   /// from the raw rows (the app controller does it at start-up).
@@ -44,6 +44,10 @@ class HeildDb {
               'UPDATE hr_samples SET contact = 2 WHERE contact = 0',
             );
           }
+          if (oldVersion < 4) {
+            // v4: sign-in and online sync history (the Online tab).
+            await db.execute(_onlineLog);
+          }
         },
       ),
     );
@@ -58,6 +62,15 @@ class HeildDb {
   }
 
   Future<void> close() => db.close();
+
+  static const _onlineLog = '''
+    CREATE TABLE online_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      message TEXT NOT NULL
+    )''';
 
   static const _schema = [
     '''
@@ -131,5 +144,6 @@ class HeildDb {
       level TEXT NOT NULL,
       message TEXT NOT NULL
     )''',
+    _onlineLog,
   ];
 }
