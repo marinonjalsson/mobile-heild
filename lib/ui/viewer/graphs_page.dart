@@ -10,12 +10,13 @@ import '../../state/sync_service.dart';
 import '../widgets/common.dart';
 import 'chart.dart';
 import 'format.dart';
+import 'graph_window.dart';
 import 'live_card.dart';
 
-enum _Range { hour, sixHours, day, week, month }
-
-/// Minute-stat graphs per type over an hour, six hours, a day, a week or a
-/// month. Prev/next step by one window; the charts themselves pinch-zoom.
+/// Minute-stat graphs per type over the last hour, six hours, day, week or
+/// month: the window ends at the present and reaches one range back, and the
+/// axis stops at the newest point. Prev/next step by one window (a window in
+/// the past is shown whole); the charts themselves pinch-zoom.
 /// "Live" in the type row streams the shown type (heart rate, pulse intervals
 /// or movement) and shows it in a card above the charts.
 class GraphsPage extends StatefulWidget {
@@ -32,15 +33,25 @@ class _GraphsPageState extends State<GraphsPage> {
   bool _wasActive = false;
   bool _ending = false;
   Timer? _endTimer;
+  late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
     super.initState();
     appController.sync.addListener(_onSync);
+    // Coming back to the app after a while: "the last hour" has moved on.
+    // No timer for this: the engine also runs headless, and a tick a minute
+    // there would be a wake-up a minute for nobody.
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        if (mounted && _end == null) setState(() {});
+      },
+    );
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     appController.sync.removeListener(_onSync);
     _endTimer?.cancel();
     super.dispose();
@@ -65,93 +76,42 @@ class _GraphsPageState extends State<GraphsPage> {
   }
 
   PolarDataType _type = PolarDataType.hr;
-  _Range _range = _Range.day;
+  GraphRange _range = GraphRange.day;
 
-  /// Any instant inside the shown window; [_window] aligns it to the range.
-  DateTime _anchor = DateTime.now();
-
-  (DateTime from, DateTime to) get _window {
-    final a = _anchor;
-    final day = DateTime(a.year, a.month, a.day);
-    return switch (_range) {
-      _Range.hour => (
-        DateTime(a.year, a.month, a.day, a.hour),
-        DateTime(a.year, a.month, a.day, a.hour + 1),
-      ),
-      _Range.sixHours => (
-        DateTime(a.year, a.month, a.day, a.hour - a.hour % 6),
-        DateTime(a.year, a.month, a.day, a.hour - a.hour % 6 + 6),
-      ),
-      _Range.day => (day, DateTime(a.year, a.month, a.day + 1)),
-      _Range.week => (
-        day.subtract(Duration(days: day.weekday - 1)),
-        DateTime(a.year, a.month, a.day - (day.weekday - 1) + 7),
-      ),
-      _Range.month => (
-        DateTime(a.year, a.month),
-        DateTime(a.year, a.month + 1),
-      ),
-    };
-  }
+  /// Where the window ends, or null to follow the present ("Now").
+  DateTime? _end;
 
   int get _bucketMs => switch (_range) {
-    _Range.hour || _Range.sixHours || _Range.day => 60000,
-    _Range.week => 600000,
-    _Range.month => 3600000,
+    GraphRange.hour || GraphRange.sixHours || GraphRange.day => 60000,
+    GraphRange.week => 600000,
+    GraphRange.month => 3600000,
   };
 
   void _shift(int dir) {
-    final (from, _) = _window;
-    setState(() {
-      // Step from the window start so DST days and month lengths work out.
-      _anchor = switch (_range) {
-        _Range.hour => DateTime(
-          from.year,
-          from.month,
-          from.day,
-          from.hour + dir,
-          30,
-        ),
-        _Range.sixHours => DateTime(
-          from.year,
-          from.month,
-          from.day,
-          from.hour + 6 * dir,
-          30,
-        ),
-        _Range.day => DateTime(from.year, from.month, from.day + dir, 12),
-        _Range.week => DateTime(from.year, from.month, from.day + 7 * dir, 12),
-        _Range.month => DateTime(from.year, from.month + dir, 1, 12),
-      };
-    });
+    final now = DateTime.now();
+    final end = rangeBack(
+      GraphWindow.at(_range, end: _end, now: now).to,
+      _range,
+      -dir,
+    );
+    // Stepping forward into the present goes back to following it.
+    setState(() => _end = end.isBefore(now) ? end : null);
   }
 
-  String get _title {
-    final (from, to) = _window;
-    return switch (_range) {
-      _Range.hour || _Range.sixHours =>
+  static String _title(GraphRange range, GraphWindow w) {
+    final from = w.from;
+    final to = w.axisTo;
+    final sameDay =
+        from.year == to.year && from.month == to.month && from.day == to.day;
+    return switch (range) {
+      GraphRange.hour || GraphRange.sixHours when sameDay =>
         '${fmtDate.format(from)} · ${fmtTime.format(from)} – ${fmtTime.format(to)}',
-      _Range.day => fmtDateLong.format(from),
-      _Range.week =>
-        '${fmtDate.format(from)} – ${fmtDate.format(to.subtract(const Duration(days: 1)))}',
-      _Range.month => '${_monthName(from.month)} ${from.year}',
+      GraphRange.hour || GraphRange.sixHours || GraphRange.day =>
+        '${fmtDateTime.format(from)} – ${fmtDateTime.format(to)}',
+      GraphRange.week ||
+      GraphRange.month => '${fmtDate.format(from)} – ${fmtDate.format(to)}',
     };
   }
-
-  static String _monthName(int m) => const [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
-  ][m - 1];
 
   /// Segment label per type (short enough for three in a row).
   static String _short(PolarDataType t) => switch (t) {
@@ -175,31 +135,48 @@ class _GraphsPageState extends State<GraphsPage> {
   Object? _futureKey;
   Future<List<StatBucket>>? _future;
 
+  /// The buckets of the window on screen, once loaded: the date row shows
+  /// where the axis ends, which depends on them.
+  List<StatBucket> _buckets = const [];
+
+  /// While following the present the axis ends at the newest point; a window
+  /// in the past is shown whole.
+  GraphWindow _shown(GraphWindow w, List<StatBucket> b) =>
+      _end == null ? w.trimmedTo(b, _bucketMs) : w;
+
   Future<List<StatBucket>> _stats(int fromMs, int toMs, int version) {
     final key = (_type, fromMs, toMs, _bucketMs, version);
     if (key != _futureKey) {
       _futureKey = key;
-      _future = appController.repo.stats(
+      _buckets = const [];
+      final future = _future = appController.repo.stats(
         _type,
         fromMs,
         toMs,
         bucketMs: _bucketMs,
         alignMs: fromMs,
       );
+      future.then((b) {
+        if (mounted && identical(future, _future)) {
+          setState(() => _buckets = b);
+        }
+      });
     }
     return _future!;
   }
 
   @override
   Widget build(BuildContext context) {
-    final (from, to) = _window;
-    final fromMs = from.millisecondsSinceEpoch;
-    final toMs = to.millisecondsSinceEpoch;
     final sync = appController.sync;
     final dc = appController.device;
     return ListenableBuilder(
       listenable: Listenable.merge([sync, dc]),
       builder: (context, _) {
+        // Inside the builder: while following the present the window moves,
+        // and every sync notification is a chance to move it.
+        final window = GraphWindow.at(_range, end: _end, now: DateTime.now());
+        final fromMs = window.fromMs;
+        final toMs = window.toMs;
         final busy = _active(sync, dc) || _ending;
         final connecting = !sync.isRunning && _active(sync, dc);
         final status = _ending && !_active(sync, dc)
@@ -248,6 +225,7 @@ class _GraphsPageState extends State<GraphsPage> {
                 builder: (context, snap) {
                   final b = snap.data;
                   if (b == null) return const LinearProgressIndicator();
+                  final shown = _shown(window, b);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -272,8 +250,12 @@ class _GraphsPageState extends State<GraphsPage> {
                                 StatChart(
                                   buckets: b,
                                   fromMs: fromMs,
-                                  toMs: toMs,
+                                  toMs: shown.axisTo.millisecondsSinceEpoch,
                                   bucketMs: _bucketMs,
+                                  // The window slides a minute at a time
+                                  // while following the present; that must
+                                  // not throw away a pinch-zoom.
+                                  viewKey: (_type, _range, _end),
                                   field: panel.field,
                                   band: panel.band,
                                   unit: panel.unit,
@@ -309,27 +291,25 @@ class _GraphsPageState extends State<GraphsPage> {
                 children: [
                   // The window: < date/time >, styled like the rows below.
                   _DateRow(
-                    title: _title,
+                    title: _title(_range, _shown(window, _buckets)),
                     onPrev: () => _shift(-1),
-                    onNext: toMs > DateTime.now().millisecondsSinceEpoch
-                        ? null
-                        : () => _shift(1),
+                    onNext: _end == null ? null : () => _shift(1),
                   ),
                   // Action bar: the time window group, then the commands.
-                  _BarRow<_Range>(
+                  _BarRow<GraphRange>(
                     items: const [
-                      (_Range.hour, '1 h'),
-                      (_Range.sixHours, '6 h'),
-                      (_Range.day, 'Day'),
-                      (_Range.week, 'Week'),
-                      (_Range.month, 'Month'),
+                      (GraphRange.hour, '1 h'),
+                      (GraphRange.sixHours, '6 h'),
+                      (GraphRange.day, 'Day'),
+                      (GraphRange.week, 'Week'),
+                      (GraphRange.month, 'Month'),
                     ],
                     selected: _range,
                     onSelected: (r) => setState(() => _range = r),
                     actions: [
                       _BarAction(
                         'Now',
-                        () => setState(() => _anchor = DateTime.now()),
+                        _end == null ? null : () => setState(() => _end = null),
                       ),
                       _BarAction(
                         'Sync',

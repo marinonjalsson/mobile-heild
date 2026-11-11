@@ -41,7 +41,9 @@ double chartLabelInterval(double visibleHours) {
   return steps.last;
 }
 
-/// A time-series line chart over [fromMs, toMs). X is hours since [fromMs].
+/// A time-series line chart over [fromMs, toMs). X is hours since the local
+/// midnight before [fromMs], so grid lines and time labels fall on round
+/// clock times whatever minute the window starts at.
 /// Buckets further apart than two bucket widths break the line (data gaps).
 ///
 /// Unless [sparkline], the chart can be zoomed along the time axis with a
@@ -61,6 +63,7 @@ class StatChart extends StatefulWidget {
     this.height = 220,
     this.color,
     this.sparkline = false,
+    this.viewKey,
   });
 
   final List<StatBucket> buckets;
@@ -77,6 +80,12 @@ class StatChart extends StatefulWidget {
 
   /// No axes, no grid, no touch, no zoom: for the dashboard.
   final bool sparkline;
+
+  /// Identifies the view for the purpose of keeping a zoom. When given, the
+  /// zoom resets only when this changes; when null, whenever the window
+  /// ([fromMs], [toMs]) does. A window that follows the present moves every
+  /// minute and passes a key that does not.
+  final Object? viewKey;
 
   /// Furthest the time axis can be zoomed in (24× = one hour of a day).
   static const maxZoom = 24.0;
@@ -99,7 +108,10 @@ class _StatChartState extends State<StatChart> {
   void didUpdateWidget(StatChart old) {
     super.didUpdateWidget(old);
     // A new window (range or prev/next) starts unzoomed.
-    if (old.fromMs != widget.fromMs || old.toMs != widget.toMs) {
+    final changed = widget.viewKey != null || old.viewKey != null
+        ? old.viewKey != widget.viewKey
+        : old.fromMs != widget.fromMs || old.toMs != widget.toMs;
+    if (changed) {
       _zoom.value = Matrix4.identity();
     }
   }
@@ -123,7 +135,14 @@ class _StatChartState extends State<StatChart> {
   bool get band => widget.band;
   bool get sparkline => widget.sparkline;
 
-  double _x(int ms) => (ms - fromMs) / 3600000;
+  /// Local midnight before the window: x = 0.
+  int get _originMs {
+    final t = DateTime.fromMillisecondsSinceEpoch(fromMs);
+    return DateTime(t.year, t.month, t.day).millisecondsSinceEpoch;
+  }
+
+  double _x(int ms) => (ms - _originMs) / 3600000;
+  int _ms(double x) => _originMs + (x * 3600000).round();
 
   List<List<FlSpot>> _segments(StatField f) {
     final out = <List<FlSpot>>[];
@@ -207,8 +226,8 @@ class _StatChartState extends State<StatChart> {
 
     final chart = LineChart(
       LineChartData(
-        minX: 0,
-        maxX: hours,
+        minX: _x(fromMs),
+        maxX: _x(toMs),
         minY: lo - pad,
         maxY: hi + pad,
         lineBarsData: bars,
@@ -250,11 +269,12 @@ class _StatChartState extends State<StatChart> {
               showTitles: true,
               reservedSize: 24,
               interval: labelInterval,
+              // Only the round times: the window edges are arbitrary minutes
+              // and would collide with their neighbours.
+              minIncluded: false,
+              maxIncluded: false,
               getTitlesWidget: (v, meta) {
-                if (v >= hours) return const SizedBox.shrink();
-                final t = DateTime.fromMillisecondsSinceEpoch(
-                  fromMs + (v * 3600000).round(),
-                );
+                final t = DateTime.fromMillisecondsSinceEpoch(_ms(v));
                 final label = visibleHours <= 48
                     ? fmtTime.format(t)
                     : '${t.day}/${t.month}';
@@ -274,7 +294,7 @@ class _StatChartState extends State<StatChart> {
               for (final s in spots)
                 if (s.bar.barWidth > 0)
                   LineTooltipItem(
-                    '${_num(s.y)} $unit\n${fmtTimeMs(fromMs + (s.x * 3600000).round())}',
+                    '${_num(s.y)} $unit\n${fmtTimeMs(_ms(s.x))}',
                     TextStyle(color: scheme.onInverseSurface),
                   )
                 else

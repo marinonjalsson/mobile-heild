@@ -22,7 +22,9 @@ signed-in user's token. MQTT was abandoned (2026-11-11).
   sensor, sync, details, phone storage; `live_card.dart` the live cards shown on Graphs during a live session (HR card on
   Heart rate, PP-interval card on HRV);
   graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
-  with `FlTransformationConfig`, two-finger only so the list keeps scrolling; `graphs_page.dart` ranges 1 h/6 h/day/week/month,
+  with `FlTransformationConfig`, two-finger only so the list keeps scrolling; `graphs_page.dart` ranges 1 h/6 h/day/week/month
+  as rolling windows (`graph_window.dart`: now minus the range, axis ending at the newest point; < > step one window, a
+  past window is shown whole, Now returns to following the present; no minute timer, the engine also runs headless),
   table + recording detail), `settings/` (settings, device settings), and the milestone-1 control panel:
   `scan_page.dart`, `device_page.dart` (tabs Live / Offline / Device / Advanced / Log), `widgets/common.dart`.
 - `android/app/src/main/kotlin/is/loria/heild/`:
