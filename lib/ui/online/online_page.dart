@@ -70,7 +70,15 @@ class _SignIn extends StatelessWidget {
             label: const Text('Sign in'),
           ),
         ),
-        if (again)
+        if (auth.signingIn)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: auth.cancelSignIn,
+              child: const Text('Cancel'),
+            ),
+          ),
+        if (again && !auth.signingIn)
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(

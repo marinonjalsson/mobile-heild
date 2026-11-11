@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -149,6 +150,35 @@ void main() {
     expect(auth.status, AuthStatus.signedOut);
     expect(auth.lastError, isNull);
     expect(await repo.onlineHistory(), isEmpty);
+  });
+
+  test('a sign-in the browser never answers can be cancelled', () async {
+    final browser = Completer<TokenSet?>();
+    final auth = AuthController(
+      repo,
+      client: OidcClient(const OidcConfig(), client: server.client),
+      store: store,
+      authorizer: () => browser.future,
+    );
+    await auth.load();
+    final first = auth.signIn();
+    await Future<void>.delayed(Duration.zero);
+    expect(auth.busy, isTrue);
+    expect(auth.signingIn, isTrue);
+
+    auth.cancelSignIn();
+    expect(auth.busy, isFalse);
+    expect(auth.status, AuthStatus.signedOut);
+
+    // The browser finishing afterwards signs nobody in, and the session it
+    // made is handed back.
+    browser.complete(fromBrowser());
+    expect(await first, isFalse);
+    await Future<void>.delayed(Duration.zero);
+    expect(auth.status, AuthStatus.signedOut);
+    expect(auth.busy, isFalse);
+    expect(store.value, isNull);
+    expect(server.revocations, 1);
   });
 
   test('a failed sign-in is reported and logged', () async {

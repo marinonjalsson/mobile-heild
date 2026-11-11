@@ -107,6 +107,11 @@ signed-in user's token. MQTT was abandoned (2026-11-11).
   `preferred_username` from **userinfo**; refresh tokens **rotate** and the old one is refused with `invalid_grant`, so
   `AuthController.accessToken()` is single-flight and stores the new refresh token before anything else; the consent page
   shows on every sign-in (Authelia will not remember consent with `offline_access`).
+- **`MainActivity` must not have `android:taskAffinity=""`** (the Flutter template adds it). With it the redirect lands
+  in a new task, AppAuth's waiting activity is never found and the browser hangs on the consent page with the spinner
+  on ACCEPT; Authelia has answered 200 by then, so the server logs look fine (seen and fixed 2026-11-11 on the phone).
+- A sign-in that the browser never answers leaves `signingIn` set; `AuthController.cancelSignIn()` (Cancel on the
+  Online tab) abandons it, and a session that still arrives afterwards is revoked.
 - Lifetimes (Authelia lifespan `app`): access token 1 h, refresh token 90 days, renewed on every use.
 - State: refresh token in `SecureTokenStore` (never in SQLite), profile in `settings` (`auth_username`, `auth_name`,
   `auth_email`, `auth_signed_in_ms`, `auth_expired`), access token in memory. `AuthStatus.expired` = the server refused

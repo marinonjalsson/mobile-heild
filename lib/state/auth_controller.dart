@@ -48,6 +48,10 @@ class AuthController extends ChangeNotifier {
   /// A sign-in, sign-out or check is running (the page disables its buttons).
   bool busy = false;
 
+  /// [busy] because a sign-in is waiting for the browser; see [cancelSignIn].
+  bool signingIn = false;
+  int _signInRun = 0;
+
   /// Why the last sign-in or check did not work, for the page. Cleared by the
   /// next one that does.
   String? lastError;
@@ -84,11 +88,20 @@ class AuthController extends ChangeNotifier {
   /// ([lastError] says which).
   Future<bool> signIn() async {
     if (busy) return false;
+    final run = ++_signInRun;
     busy = true;
+    signingIn = true;
     lastError = null;
     notifyListeners();
     try {
       final tokens = await _authorizer();
+      if (run != _signInRun) {
+        // Cancelled here while the browser was still open, and then finished
+        // there anyway. Nobody is waiting for this session: give it back.
+        final late = tokens?.refreshToken;
+        if (late != null) unawaited(client.revoke(late).catchError((_) {}));
+        return false;
+      }
       if (tokens == null) return false; // closed the browser
       final refresh = tokens.refreshToken;
       if (refresh == null) {
@@ -107,13 +120,29 @@ class AuthController extends ChangeNotifier {
       await _log('auth', 'signed in as ${info.username}');
       return true;
     } catch (e) {
+      if (run != _signInRun) return false;
       lastError = _describe(e);
       await _log('auth', 'sign-in failed: $lastError', ok: false);
       return false;
     } finally {
-      busy = false;
-      notifyListeners();
+      if (run == _signInRun) {
+        busy = false;
+        signingIn = false;
+        notifyListeners();
+      }
     }
+  }
+
+  /// Gives up on a sign-in that is waiting for the browser. The browser part
+  /// does not always answer (the tab can be swiped away with the app, or the
+  /// redirect can fail to come back), and without this the button would stay
+  /// disabled until the app is killed.
+  void cancelSignIn() {
+    if (!signingIn) return;
+    _signInRun++;
+    busy = false;
+    signingIn = false;
+    notifyListeners();
   }
 
   /// Forgets the session here and asks the server to forget it too. The local
