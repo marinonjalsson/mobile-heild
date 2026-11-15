@@ -137,6 +137,13 @@ class PolarBridge {
   Future<void> serviceNotification(String title, String text) =>
       _call<void>('serviceNotification', {'title': title, 'text': text});
 
+  /// Shows the "needs attention" notification (its own, audible channel).
+  Future<void> alert(String title, String text) =>
+      _call<void>('alert', {'title': title, 'text': text});
+
+  /// Removes the notification shown by [alert].
+  Future<void> alertClear() => _call<void>('alertClear');
+
   /// Arms the scheduled sync alarm every [hours] hours (0 switches it off).
   /// When it fires, Kotlin starts the service and sends `scheduledSync`.
   Future<void> scheduleSync(int hours) =>

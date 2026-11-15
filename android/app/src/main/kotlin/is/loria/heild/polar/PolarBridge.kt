@@ -14,6 +14,7 @@ import `is`.loria.heild.polar.Mappers.str
 import `is`.loria.heild.polar.Mappers.strOrNull
 import `is`.loria.heild.ActivityHolder
 import `is`.loria.heild.service.HeildService
+import `is`.loria.heild.service.Alert
 import `is`.loria.heild.service.SyncSchedule
 import android.content.Intent
 import android.net.Uri
@@ -242,6 +243,8 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
                 HeildService.instance?.updateNotification(a.str("title"), a.str("text"))
                 result.success(null)
             }
+            "alert" -> { Alert.show(appContext, a.str("title"), a.str("text")); result.success(null) }
+            "alertClear" -> { Alert.clear(appContext); result.success(null) }
             "companionAssociatedAddresses" -> run(result) { api.getAssociatedDeviceAddresses() }
             "companionIsAssociated" -> run(result) { api.isAssociated(id) }
             "companionRemove" -> run(result) { api.removeAssociation(id) }

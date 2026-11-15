@@ -86,9 +86,23 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   the app event `scheduledSync` to Dart), app start, app coming to the foreground with data older than 30 min, "Sync now",
   and optionally presence (`autoSync`, off by default). A connect attempt gives up after `connectTimeout` (90 s) so the
   SDK never scans for an absent sensor for long.
-- One sync round (`SyncService._run`): set clock → stop running recordings → list → fetch packed → `Repository.storeRecording` →
-  delete on sensor → ensure trigger + restart recordings → retention. Never fatal: errors are logged to `sync_log` and
+- One sync round (`SyncService._run`): set clock → stop running recordings → list → restart recordings + ensure trigger →
+  fetch packed → `Repository.storeRecording` → delete on sensor → retention. Never fatal: errors are logged to `sync_log` and
   retried on the next trigger.
+- **Keeping the sensor recording** (2026-11-15, after a scheduled sync at 22:23 lost its link during the movement
+  fetch and the sensor recorded nothing for an hour):
+  - Recording restarts **before** the fetch (`_run`: stop → list → start + confirm → trigger → fetch → delete), so the
+    sensor is stopped for seconds, not for the transfer, and a link lost during the fetch leaves it recording. The
+    listed (closed) recordings are the only ones fetched and deleted. After the fetch the status is read once more
+    and recording is started again if a type dropped out.
+  - `_restartOwed`: a sync broke off between stop and start, or the sensor did not start a type (not for a sensor in
+    the charger). While it is set, every failed attempt (also "sensor not found") brings the Kotlin sync alarm forward
+    (`_armRetry` → `scheduleSyncIn`, `retryDelays` 1, 1, 1, 5, 15, 30 min); then the schedule takes over and starts the
+    series again. A sync that confirms recording puts the alarm back on the schedule (`_clearRetry`). The retry alarm
+    also fires when the scheduled sync is switched off.
+  - When a series is used up the phone shows the notification "Sensor is not recording" (`bridge.alert` → Kotlin
+    `service/Alert.kt`, channel `heild.alert`, audible, tap opens the app); every sync that confirms recording
+    removes it (`alertClear`).
 - Live session (`SyncService.startLive(type)/setLiveType/stopLive`, "Live"/"Stop" in the Graphs type row): the only way to
   stay connected. The stream follows the selected graph (`liveType`): Heart rate → HR stream, HRV → PP intervals via
   `LivePpiService.liveWanted`; switching graphs while live switches the stream. **Movement cannot be streamed**: on FW 3.0.16

@@ -158,8 +158,12 @@ class SyncService extends ChangeNotifier {
       // The process died between stopping and restarting the recordings.
       if (recording == RecordingState.paused) {
         recording = RecordingState.failed;
-        recordingProblem = 'The last sync was interrupted.';
+        recordingProblem = _interruptedLast;
       }
+      _restartOwed =
+          recording == RecordingState.failed &&
+          (recordingProblem == _interrupted ||
+              recordingProblem == _interruptedLast);
     } catch (_) {
       recording = RecordingState.unknown;
     }
@@ -227,6 +231,81 @@ class SyncService extends ChangeNotifier {
 
   /// Give up on a connect attempt after this: the sensor is off or away.
   static const connectTimeout = Duration(seconds: 90);
+
+  /// While the sensor is known not to record what it should ([_restartOwed]),
+  /// the sync alarm is brought forward instead of waiting for the schedule,
+  /// which can be hours away: after these delays, one after the other. Every
+  /// failed attempt (also a sensor that is not found) takes the next one; when
+  /// they are used up the schedule takes over and starts the series again.
+  static const retryDelays = [
+    Duration(minutes: 1),
+    Duration(minutes: 1),
+    Duration(minutes: 1),
+    Duration(minutes: 5),
+    Duration(minutes: 15),
+    Duration(minutes: 30),
+  ];
+
+  /// The sensor was left not recording and a sync has to put that right: a
+  /// sync broke off between stop and start, or the sensor did not start a
+  /// type. Not set for a sensor in the charger (it cannot record there and
+  /// starts by itself when taken out).
+  bool _restartOwed = false;
+
+  /// Retries armed in the current series.
+  int _retries = 0;
+
+  /// The sync alarm stands at a retry delay instead of the schedule.
+  bool _retryArmed = false;
+
+  static const _interrupted =
+      'The sync was interrupted before recording restarted.';
+  static const _interruptedLast = 'The last sync was interrupted.';
+
+  Future<void> _armRetry() async {
+    if (_retries >= retryDelays.length) {
+      _log(
+        'warn',
+        'sensor still not recording after ${retryDelays.length} retries; '
+            'waiting for the next sync',
+      );
+      // The app has done what it can; the wearer has to know.
+      try {
+        await bridge.alert(
+          'Sensor is not recording',
+          '${recordingProblem ?? 'Recording could not be restarted.'} '
+              'Open heild with the sensor nearby.',
+        );
+      } catch (e) {
+        _log('warn', 'alert not shown: $e');
+      }
+      return;
+    }
+    final delay = retryDelays[_retries++];
+    try {
+      await bridge.scheduleSyncIn(delay.inSeconds);
+      _retryArmed = true;
+      _log(
+        'info',
+        'sensor not recording: retry $_retries of ${retryDelays.length} '
+            'in ${delay.inMinutes} min',
+      );
+    } catch (e) {
+      _log('warn', 'retry not armed: $e');
+    }
+  }
+
+  /// A sync completed: the alarm goes back to the schedule.
+  Future<void> _clearRetry() async {
+    _retries = 0;
+    if (!_retryArmed) return;
+    _retryArmed = false;
+    try {
+      await bridge.scheduleSync(settings.syncEveryHours);
+    } catch (e) {
+      _log('warn', 'schedule not restored: $e');
+    }
+  }
 
   /// Opening the app syncs when the last sync is older than this.
   static const staleAfter = Duration(minutes: 30);
@@ -303,8 +382,12 @@ class SyncService extends ChangeNotifier {
         _log('info', 'sensor out of range (${e.identifier})');
         _scheduleIdleCheck();
       case 'scheduledSync':
-        _log('info', 'scheduled sync');
-        unawaited(connectAndSync(reason: 'scheduled'));
+        // Kotlin has put the alarm back on the schedule by now.
+        final retry = _retryArmed;
+        _retryArmed = false;
+        if (!retry) _retries = 0; // the schedule starts a new series
+        _log('info', retry ? 'retrying the sync' : 'scheduled sync');
+        unawaited(connectAndSync(reason: retry ? 'retry' : 'scheduled'));
     }
   }
 
@@ -344,6 +427,7 @@ class SyncService extends ChangeNotifier {
         liveRequested = false;
         notifyListeners();
       }
+      if (_restartOwed) await _armRetry();
       await _rest();
     });
   }
@@ -380,6 +464,7 @@ class SyncService extends ChangeNotifier {
       _syncOnReady = false;
       _setPhase(SyncPhase.error, 'Connect failed: $e');
       _log('error', 'connect failed: $e');
+      if (_restartOwed) await _armRetry();
       await _rest();
     }
   }
@@ -498,6 +583,11 @@ class SyncService extends ChangeNotifier {
         'info',
         'sync done: $lastRunRecordings recordings, $lastRunSamples samples',
       );
+      if (_restartOwed) {
+        await _armRetry();
+      } else {
+        await _clearRetry();
+      }
     } catch (e) {
       lastError = '$e';
       _setPhase(SyncPhase.error, '$e');
@@ -506,9 +596,11 @@ class SyncService extends ChangeNotifier {
         // Stopped for the fetch and never confirmed running again.
         await _setRecording(
           RecordingState.failed,
-          problem: 'The sync was interrupted before recording restarted.',
+          problem: _interrupted,
         );
+        _restartOwed = true;
       }
+      if (_restartOwed) await _armRetry();
     } finally {
       _running = false;
       _afterRun();
@@ -575,6 +667,15 @@ class SyncService extends ChangeNotifier {
           '${skipped == 0 ? '' : ' ($skipped of other types left there)'}',
     );
 
+    // Recording starts again before the fetch, not after it: the closed
+    // recordings are listed, so the new ones cannot be mistaken for them,
+    // and the sensor is stopped for seconds instead of for the whole
+    // transfer. A link lost during the fetch then leaves it recording.
+    _setPhase(SyncPhase.restartingRecordings, 'Arming recordings');
+    final problems = await _ensureRecording(id);
+    await _confirmRecording(id, problems);
+    await _ensureTrigger(id);
+
     for (var i = 0; i < entries.length; i++) {
       final e = entries[i];
       final label = '${e.type.label} ${_fmt(e.date)} (${_kb(e.size)})';
@@ -619,10 +720,15 @@ class SyncService extends ChangeNotifier {
     }
     progressPercent = null;
 
-    _setPhase(SyncPhase.restartingRecordings, 'Arming recordings');
-    await _ensureTrigger(id);
-    final problems = await _ensureRecording(id);
-    await _confirmRecording(id, problems);
+    // The last word before leaving: is the sensor still recording after the
+    // transfer? Only a change is acted on, so the status keeps its time.
+    final wanted = settings.recordTypes;
+    final still = (await bridge.offlineRecordingStatus(id)).toSet();
+    if (recording == RecordingState.recording && !still.containsAll(wanted)) {
+      _log('warn', 'recording stopped during the sync; starting it again');
+      _setPhase(SyncPhase.restartingRecordings, 'Arming recordings');
+      await _confirmRecording(id, await _ensureRecording(id));
+    }
 
     final removed = await repo.retention(days: settings.retentionDays);
     if (removed > 0) _log('info', 'retention removed $removed recordings');
@@ -729,18 +835,27 @@ class SyncService extends ChangeNotifier {
         .intersection(wanted);
     final missing = wanted.difference(running);
     if (wanted.isEmpty) {
+      _restartOwed = false;
       await _setRecording(
         RecordingState.failed,
         problem: 'Nothing is selected to record (Settings).',
       );
     } else if (missing.isEmpty) {
+      _restartOwed = false;
       await _setRecording(RecordingState.recording, types: running);
+      // Always: the alert may be from before this process started.
+      try {
+        await bridge.alertClear();
+      } catch (e) {
+        _log('warn', 'alert not cleared: $e');
+      }
       _log(
         'info',
         'sensor confirms recording: ${running.map((t) => t.label).join(', ')}',
       );
     } else {
       final why = problems.values.join(' ');
+      _restartOwed = !why.contains('ERROR_DEVICE_IN_CHARGER');
       final problem = why.contains('ERROR_DEVICE_IN_CHARGER')
           ? 'The sensor is in the charger.'
           : why.isEmpty
