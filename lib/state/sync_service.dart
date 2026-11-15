@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -9,6 +10,7 @@ import '../polar/polar_bridge.dart';
 import '../polar/polar_errors.dart';
 import 'app_settings.dart';
 import 'device_controller.dart';
+import 'features.dart';
 import 'live_hr.dart';
 import 'live_ppi.dart';
 
@@ -24,6 +26,23 @@ enum SyncPhase {
   restartingRecordings,
   done,
   error,
+}
+
+/// What the app knows about the recordings on the sensor. It only learns
+/// this during a sync, so every state carries the time it was established.
+enum RecordingState {
+  /// Never confirmed (no sync yet on this phone).
+  unknown,
+
+  /// A sync has stopped the recordings to fetch them; nothing is recorded.
+  paused,
+
+  /// The sensor reported every wanted recording as running.
+  recording,
+
+  /// After a sync the sensor did not report every wanted recording, or the
+  /// sync broke off while they were stopped.
+  failed,
 }
 
 /// Keeps the sensor recording and the phone's database in step without a
@@ -86,6 +105,69 @@ class SyncService extends ChangeNotifier {
   void dataChanged() {
     dataVersion++;
     notifyListeners();
+  }
+
+  /// Whether the sensor is recording, as far as the last sync could tell
+  /// (kept in the settings table, so it survives the process).
+  RecordingState recording = RecordingState.unknown;
+
+  /// When [recording] was established.
+  DateTime? recordingAt;
+
+  /// The types the sensor reported as recording at [recordingAt].
+  Set<PolarDataType> recordingTypes = {};
+
+  /// Why not everything is recording ([RecordingState.failed]).
+  String? recordingProblem;
+
+  /// The sensor writes 0 as heart rate for its first 21 s of a recording, so
+  /// a confirmed recording counts as started only this long after
+  /// [recordingAt] (the card stays amber until then).
+  static const recordingSettle = Duration(seconds: 20);
+
+  static const _recordingKey = 'recording_status';
+
+  Future<void> loadRecordingStatus() async {
+    final raw = await repo.getSetting(_recordingKey);
+    if (raw == null) return;
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      recording = RecordingState.values.byName(m['state'] as String);
+      recordingAt = DateTime.fromMillisecondsSinceEpoch(m['at'] as int);
+      recordingTypes = {
+        for (final t in m['types'] as List) PolarDataType.fromWire(t as String),
+      };
+      recordingProblem = m['problem'] as String?;
+      // The process died between stopping and restarting the recordings.
+      if (recording == RecordingState.paused) {
+        recording = RecordingState.failed;
+        recordingProblem = 'The last sync was interrupted.';
+      }
+    } catch (_) {
+      recording = RecordingState.unknown;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _setRecording(
+    RecordingState state, {
+    Set<PolarDataType> types = const {},
+    String? problem,
+  }) async {
+    recording = state;
+    recordingAt = DateTime.now();
+    recordingTypes = types;
+    recordingProblem = problem;
+    notifyListeners();
+    await repo.setSetting(
+      _recordingKey,
+      jsonEncode({
+        'state': state.name,
+        'at': recordingAt!.millisecondsSinceEpoch,
+        'types': [for (final t in types) t.wire],
+        'problem': problem,
+      }),
+    );
   }
 
   String? lastError;
@@ -291,6 +373,7 @@ class SyncService extends ChangeNotifier {
   /// [stopLive]. While live, [setLiveType] switches the stream.
   Future<void> startLive(PolarDataType type) async {
     final id = settings.pairedDeviceId;
+    if (!liveEnabled) return;
     if (id == null || liveRequested || !liveTypes.contains(type)) return;
     liveRequested = true;
     liveType = type;
@@ -403,6 +486,13 @@ class SyncService extends ChangeNotifier {
       lastError = '$e';
       _setPhase(SyncPhase.error, '$e');
       _log('error', 'sync failed: $e');
+      if (recording == RecordingState.paused) {
+        // Stopped for the fetch and never confirmed running again.
+        await _setRecording(
+          RecordingState.failed,
+          problem: 'The sync was interrupted before recording restarted.',
+        );
+      }
     } finally {
       _running = false;
       _afterRun();
@@ -432,14 +522,42 @@ class SyncService extends ChangeNotifier {
         _log('warn', 'stop ${t.label}: $e');
       }
     }
+    await _setRecording(RecordingState.paused);
     if (running.isNotEmpty) {
       await Future<void>.delayed(const Duration(seconds: 1));
     }
 
     _setPhase(SyncPhase.listing, 'Listing recordings');
-    final entries = await bridge.listOfflineRecordings(id).toList();
+    final listed = await bridge.listOfflineRecordings(id).toList();
+    // Only heart rate and movement are fetched. A pulse interval recording
+    // (from before they were switched off) is removed from the sensor
+    // unread; any other type stays there, untouched.
+    final entries = <OfflineRecordingEntry>[];
+    var skipped = 0;
+    for (final e in listed) {
+      if (supportedTypes.contains(e.type)) {
+        entries.add(e);
+      } else if (e.type == PolarDataType.ppi) {
+        try {
+          await bridge.removeOfflineRecord(id, e);
+          _log(
+            'info',
+            'removed unread ${e.type.label} ${_fmt(e.date)} (${_kb(e.size)}) '
+                'from the sensor',
+          );
+        } on PolarException catch (err) {
+          _log('warn', 'remove ${e.type.label} on sensor: $err');
+        }
+      } else {
+        skipped++;
+      }
+    }
     entries.sort((a, b) => a.date.compareTo(b.date));
-    _log('info', '${entries.length} recordings on sensor');
+    _log(
+      'info',
+      '${entries.length} recordings on sensor'
+          '${skipped == 0 ? '' : ' ($skipped of other types left there)'}',
+    );
 
     for (var i = 0; i < entries.length; i++) {
       final e = entries[i];
@@ -487,7 +605,8 @@ class SyncService extends ChangeNotifier {
 
     _setPhase(SyncPhase.restartingRecordings, 'Arming recordings');
     await _ensureTrigger(id);
-    await _ensureRecording(id);
+    final problems = await _ensureRecording(id);
+    await _confirmRecording(id, problems);
 
     final removed = await repo.retention(days: settings.retentionDays);
     if (removed > 0) _log('info', 'retention removed $removed recordings');
@@ -533,6 +652,12 @@ class SyncService extends ChangeNotifier {
     }
   }
 
+  static String _typeName(PolarDataType t) => switch (t) {
+    PolarDataType.hr => 'Heart rate',
+    PolarDataType.acc => 'Movement',
+    _ => t.label,
+  };
+
   bool _sameTrigger(OfflineRecordingTrigger a, OfflineRecordingTrigger b) {
     if (a.mode != b.mode) return false;
     if (a.features.keys
@@ -553,7 +678,10 @@ class SyncService extends ChangeNotifier {
     return true;
   }
 
-  Future<void> _ensureRecording(String id) async {
+  /// Starts the wanted recordings that are not running. Returns, per type
+  /// that could not be started, why.
+  Future<Map<PolarDataType, String>> _ensureRecording(String id) async {
+    final problems = <PolarDataType, String>{};
     final running = (await bridge.offlineRecordingStatus(id)).toSet();
     for (final t in settings.recordTypes) {
       if (running.contains(t)) continue;
@@ -566,8 +694,50 @@ class SyncService extends ChangeNotifier {
         );
         _log('info', 'recording ${t.label} started');
       } on PolarException catch (e) {
+        problems[t] = '$e';
         _log('error', 'start ${t.label} recording: $e');
       }
+    }
+    return problems;
+  }
+
+  /// Asks the sensor what it is recording now and sets [recording] from the
+  /// answer, not from the start commands having returned.
+  Future<void> _confirmRecording(
+    String id,
+    Map<PolarDataType, String> problems,
+  ) async {
+    final wanted = settings.recordTypes;
+    final running = (await bridge.offlineRecordingStatus(id))
+        .toSet()
+        .intersection(wanted);
+    final missing = wanted.difference(running);
+    if (wanted.isEmpty) {
+      await _setRecording(
+        RecordingState.failed,
+        problem: 'Nothing is selected to record (Settings).',
+      );
+    } else if (missing.isEmpty) {
+      await _setRecording(RecordingState.recording, types: running);
+      _log(
+        'info',
+        'sensor confirms recording: ${running.map((t) => t.label).join(', ')}',
+      );
+    } else {
+      final why = problems.values.join(' ');
+      final problem = why.contains('ERROR_DEVICE_IN_CHARGER')
+          ? 'The sensor is in the charger.'
+          : why.isEmpty
+          ? 'The sensor did not start it.'
+          : why;
+      await _setRecording(
+        RecordingState.failed,
+        types: running,
+        problem:
+            '${missing.map(_typeName).join(' and ')} not recording. '
+            '$problem',
+      );
+      _log('error', 'not recording: ${missing.map((t) => t.label).join(', ')}');
     }
   }
 

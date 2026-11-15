@@ -11,14 +11,13 @@ import '../widgets/common.dart';
 import 'chart.dart';
 import 'format.dart';
 import 'graph_window.dart';
-import 'live_card.dart';
+import 'recording_card.dart';
 
-/// Minute-stat graphs per type over the last hour, six hours, day, week or
-/// month: the window ends at the present and reaches one range back, and the
-/// axis stops at the newest point. Prev/next step by one window (a window in
-/// the past is shown whole); the charts themselves pinch-zoom.
-/// "Live" in the type row streams the shown type (heart rate, pulse intervals
-/// or movement) and shows it in a card above the charts.
+/// Minute-stat graphs of heart rate and, under it, movement over the last
+/// hour, six hours, day, week or month: the window ends at the present and
+/// reaches one range back, and the axis stops at the newest point. Prev/next
+/// step by one window (a window in the past is shown whole); the charts
+/// themselves pinch-zoom. Above them, whether the sensor is recording.
 class GraphsPage extends StatefulWidget {
   const GraphsPage({super.key});
 
@@ -75,7 +74,6 @@ class _GraphsPageState extends State<GraphsPage> {
     _wasActive = active;
   }
 
-  PolarDataType _type = PolarDataType.hr;
   GraphRange _range = GraphRange.day;
 
   /// Where the window ends, or null to follow the present ("Now").
@@ -113,52 +111,46 @@ class _GraphsPageState extends State<GraphsPage> {
     };
   }
 
-  /// Segment label per type (short enough for three in a row).
-  static String _short(PolarDataType t) => switch (t) {
-    PolarDataType.hr => 'Heart rate',
-    PolarDataType.ppi => 'HRV',
-    PolarDataType.acc => 'Movement',
-    _ => t.label,
-  };
-
-  /// Header per type (the app bar title).
-  static String _header(PolarDataType t) => switch (t) {
-    PolarDataType.hr => 'Heart rate',
-    PolarDataType.ppi => 'Pulse intervals · HRV',
-    PolarDataType.acc => 'Movement',
-    _ => t.label,
-  };
-
-  // The stats query is cached per (type, window, data version) so that
-  // unrelated rebuilds (sync progress ticks) do not re-query, and the chart
-  // keeps showing the old buckets while the new ones load.
+  // The stats query is cached per (window, data version) so that unrelated
+  // rebuilds (sync progress ticks) do not re-query, and the charts keep
+  // showing the old buckets while the new ones load.
   Object? _futureKey;
-  Future<List<StatBucket>>? _future;
+  Future<_Stats>? _future;
 
   /// The buckets of the window on screen, once loaded: the date row shows
   /// where the axis ends, which depends on them.
-  List<StatBucket> _buckets = const [];
+  _Stats _loaded = const _Stats([], []);
 
-  /// While following the present the axis ends at the newest point; a window
-  /// in the past is shown whole.
-  GraphWindow _shown(GraphWindow w, List<StatBucket> b) =>
-      _end == null ? w.trimmedTo(b, _bucketMs) : w;
+  /// While following the present the axis ends at the newest point of either
+  /// graph; a window in the past is shown whole.
+  GraphWindow _shown(GraphWindow w, _Stats s) {
+    if (_end != null) return w;
+    final a = w.trimmedTo(s.hr, _bucketMs);
+    final b = w.trimmedTo(s.acc, _bucketMs);
+    if (s.hr.isEmpty) return b;
+    if (s.acc.isEmpty) return a;
+    return a.axisTo.isAfter(b.axisTo) ? a : b;
+  }
 
-  Future<List<StatBucket>> _stats(int fromMs, int toMs, int version) {
-    final key = (_type, fromMs, toMs, _bucketMs, version);
+  Future<_Stats> _stats(int fromMs, int toMs, int version) {
+    final key = (fromMs, toMs, _bucketMs, version);
     if (key != _futureKey) {
       _futureKey = key;
-      _buckets = const [];
-      final future = _future = appController.repo.stats(
-        _type,
+      _loaded = const _Stats([], []);
+      Future<List<StatBucket>> of(PolarDataType t) => appController.repo.stats(
+        t,
         fromMs,
         toMs,
         bucketMs: _bucketMs,
         alignMs: fromMs,
       );
-      future.then((b) {
+      final future = _future = Future.wait([
+        of(PolarDataType.hr),
+        of(PolarDataType.acc),
+      ]).then((r) => _Stats(r[0], r[1]));
+      future.then((s) {
         if (mounted && identical(future, _future)) {
-          setState(() => _buckets = b);
+          setState(() => _loaded = s);
         }
       });
     }
@@ -186,7 +178,7 @@ class _GraphsPageState extends State<GraphsPage> {
             : sync.detail;
         return Scaffold(
           appBar: AppBar(
-            title: Text(_header(_type)),
+            title: const Text('Heart rate · Movement'),
             bottom: busy
                 ? PreferredSize(
                     preferredSize: const Size.fromHeight(28),
@@ -219,17 +211,17 @@ class _GraphsPageState extends State<GraphsPage> {
           body: ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              if (sync.isLive && _type == sync.liveType) LiveCard(dc, _type),
-              FutureBuilder<List<StatBucket>>(
+              if (appController.settings.isPaired) RecordingCard(sync),
+              FutureBuilder<_Stats>(
                 future: _stats(fromMs, toMs, sync.dataVersion),
                 builder: (context, snap) {
-                  final b = snap.data;
-                  if (b == null) return const LinearProgressIndicator();
-                  final shown = _shown(window, b);
+                  final s = snap.data;
+                  if (s == null) return const LinearProgressIndicator();
+                  final shown = _shown(window, s);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final panel in _panels(context, _type))
+                      for (final panel in _panels(context))
                         Card(
                           margin: const EdgeInsets.symmetric(vertical: 6),
                           child: Padding(
@@ -248,14 +240,16 @@ class _GraphsPageState extends State<GraphsPage> {
                                 ),
                                 const SizedBox(height: 8),
                                 StatChart(
-                                  buckets: b,
+                                  buckets: panel.type == PolarDataType.hr
+                                      ? s.hr
+                                      : s.acc,
                                   fromMs: fromMs,
                                   toMs: shown.axisTo.millisecondsSinceEpoch,
                                   bucketMs: _bucketMs,
                                   // The window slides a minute at a time
                                   // while following the present; that must
                                   // not throw away a pinch-zoom.
-                                  viewKey: (_type, _range, _end),
+                                  viewKey: (panel.type, _range, _end),
                                   field: panel.field,
                                   band: panel.band,
                                   unit: panel.unit,
@@ -268,7 +262,8 @@ class _GraphsPageState extends State<GraphsPage> {
                       Padding(
                         padding: const EdgeInsets.all(8),
                         child: Text(
-                          '${b.length} buckets · ${b.fold<int>(0, (s, x) => s + x.n)} samples'
+                          '${s.hr.fold<int>(0, (n, x) => n + x.n)} heart rate samples'
+                          ' · ${s.acc.fold<int>(0, (n, x) => n + x.n)} movement samples'
                           '${sync.lastSyncAt == null ? '' : ' · synced ${fmtAgo(sync.lastSyncAt)}'}'
                           ' · pinch with two fingers to zoom the time axis',
                           style: Theme.of(context).textTheme.bodySmall,
@@ -291,7 +286,7 @@ class _GraphsPageState extends State<GraphsPage> {
                 children: [
                   // The window: < date/time >, styled like the rows below.
                   _DateRow(
-                    title: _title(_range, _shown(window, _buckets)),
+                    title: _title(_range, _shown(window, _loaded)),
                     onPrev: () => _shift(-1),
                     onNext: _end == null ? null : () => _shift(1),
                   ),
@@ -324,36 +319,6 @@ class _GraphsPageState extends State<GraphsPage> {
                       ),
                     ],
                   ),
-                  // Type row: the graph, and Live for that graph's stream
-                  // (heart rate or pulse intervals; movement cannot be
-                  // streamed). While live, picking another graph switches
-                  // the stream.
-                  _BarRow<PolarDataType>(
-                    items: [for (final t in viewerTypes) (t, _short(t))],
-                    selected: _type,
-                    onSelected: (t) {
-                      setState(() => _type = t);
-                      if (sync.isLive && SyncService.liveTypes.contains(t)) {
-                        runAction(context, () => sync.setLiveType(t));
-                      }
-                    },
-                    actions: [
-                      _BarAction(
-                        sync.isLive ? 'Stop' : 'Live',
-                        !sync.isLive &&
-                                (busy ||
-                                    !appController.settings.isPaired ||
-                                    !SyncService.liveTypes.contains(_type))
-                            ? null
-                            : () => runAction(
-                                context,
-                                () => sync.isLive
-                                    ? sync.stopLive()
-                                    : sync.startLive(_type),
-                              ),
-                      ),
-                    ],
-                  ),
                 ],
               ),
             ),
@@ -363,48 +328,43 @@ class _GraphsPageState extends State<GraphsPage> {
     );
   }
 
-  List<_Panel> _panels(BuildContext context, PolarDataType t) {
-    final scheme = Theme.of(context).colorScheme;
-    return switch (t) {
-      PolarDataType.hr => [
-        _Panel(
-          'Heart rate (bpm) · mean with min–max band',
-          StatField.mean,
-          band: true,
-          unit: 'bpm',
-        ),
-      ],
-      PolarDataType.ppi => [
-        _Panel('PP interval (ms) · mean', StatField.mean, unit: 'ms'),
-        _Panel(
-          'HRV · RMSSD (ms)',
-          StatField.extra,
-          unit: 'ms',
-          color: scheme.tertiary,
-        ),
-      ],
-      PolarDataType.acc => [
-        _Panel(
-          'Movement · std of |a| (mG)',
-          StatField.extra,
-          unit: 'mG',
-          color: scheme.tertiary,
-        ),
-        _Panel('|a| mean (mG)', StatField.mean, unit: 'mG'),
-      ],
-      _ => const [],
-    };
-  }
+  /// Heart rate, and movement under it. Movement is the spread of the
+  /// acceleration within each minute; its mean is all gravity and not shown.
+  List<_Panel> _panels(BuildContext context) => [
+    const _Panel(
+      PolarDataType.hr,
+      'Heart rate (bpm) · mean with min–max band',
+      StatField.mean,
+      band: true,
+      unit: 'bpm',
+    ),
+    _Panel(
+      PolarDataType.acc,
+      'Movement · std of |a| (mG)',
+      StatField.extra,
+      unit: 'mG',
+      color: Theme.of(context).colorScheme.tertiary,
+    ),
+  ];
+}
+
+/// The buckets of both graphs for one window.
+class _Stats {
+  const _Stats(this.hr, this.acc);
+  final List<StatBucket> hr;
+  final List<StatBucket> acc;
 }
 
 class _Panel {
   const _Panel(
+    this.type,
     this.title,
     this.field, {
     this.band = false,
     this.unit = '',
     this.color,
   });
+  final PolarDataType type;
   final String title;
   final StatField field;
   final bool band;

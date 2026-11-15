@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../state/device_controller.dart';
+import '../state/features.dart';
 import 'advanced/advanced_tab.dart';
 import 'device/device_tab.dart';
 import 'live/live_tab.dart';
@@ -19,7 +20,7 @@ class DevicePage extends StatelessWidget {
       builder: (context, _) {
         final dc = deviceController;
         return DefaultTabController(
-          length: 5,
+          length: liveEnabled ? 5 : 4,
           child: Scaffold(
             appBar: AppBar(
               title: Text(dc.device?.name ?? dc.deviceId ?? 'Device'),
@@ -58,7 +59,7 @@ class DevicePage extends StatelessWidget {
                       isScrollable: true,
                       tabAlignment: TabAlignment.start,
                       tabs: [
-                        Tab(text: 'Live'),
+                        if (liveEnabled) Tab(text: 'Live'),
                         Tab(text: 'Offline'),
                         Tab(text: 'Device'),
                         Tab(text: 'Advanced'),
@@ -71,7 +72,7 @@ class DevicePage extends StatelessWidget {
             ),
             body: const TabBarView(
               children: [
-                LiveTab(),
+                if (liveEnabled) LiveTab(),
                 OfflineTab(),
                 DeviceTab(),
                 AdvancedTab(),

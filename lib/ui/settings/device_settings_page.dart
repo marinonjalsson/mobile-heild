@@ -157,8 +157,8 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                     padding: EdgeInsets.only(bottom: 8),
                     child: Text(
                       'The phone connects for a sync on the schedule (Settings), '
-                      'when you open the app, on "Sync now" and for a live '
-                      'session; it disconnects afterwards.',
+                      'when you open the app and on "Sync"; it disconnects '
+                      'afterwards.',
                     ),
                   ),
                   SwitchListTile(

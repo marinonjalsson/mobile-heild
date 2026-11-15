@@ -45,7 +45,9 @@ class HeildDb {
             );
           }
           if (oldVersion < 4) {
-            // v4: sign-in and online sync history (the Online tab).
+            // v4: sign-in and online sync history (the Online tab). The
+            // table may exist already: an older build run on a v4 database
+            // sets the version back without removing anything.
             await db.execute(_onlineLog);
           }
         },
@@ -64,7 +66,7 @@ class HeildDb {
   Future<void> close() => db.close();
 
   static const _onlineLog = '''
-    CREATE TABLE online_log (
+    CREATE TABLE IF NOT EXISTS online_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts_ms INTEGER NOT NULL,
       kind TEXT NOT NULL,

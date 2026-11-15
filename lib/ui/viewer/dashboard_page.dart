@@ -8,6 +8,7 @@ import '../scan_page.dart';
 import '../settings/device_settings_page.dart';
 import '../widgets/common.dart';
 import 'format.dart';
+import 'recording_card.dart';
 
 /// Everything about the paired sensor: connection, sync, battery, storage
 /// on the sensor, device information, and the phone's storage.
@@ -25,6 +26,11 @@ class DevicePage extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 24),
           children: [
             _SensorCard(app.device, app.sync),
+            if (app.settings.isPaired)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: RecordingCard(app.sync),
+              ),
             if (app.settings.isPaired) _DeviceInfoCard(app.device, app.sync),
             _StorageCard(app.repo, refreshKey: app.sync.dataVersion),
           ],

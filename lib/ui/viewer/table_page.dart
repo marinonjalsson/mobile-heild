@@ -52,8 +52,12 @@ class _TablePageState extends State<TablePage> {
                 key: ValueKey((_filter, appController.sync.dataVersion)),
                 future: repo.recordings(type: _filter, limit: 500),
                 builder: (context, snap) {
-                  final rows = snap.data;
-                  if (rows == null) return const LinearProgressIndicator();
+                  final all = snap.data;
+                  if (all == null) return const LinearProgressIndicator();
+                  final rows = [
+                    for (final r in all)
+                      if (viewerTypes.contains(r.type)) r,
+                  ];
                   if (rows.isEmpty) {
                     return const Center(
                       child: Text('No recordings stored yet.'),

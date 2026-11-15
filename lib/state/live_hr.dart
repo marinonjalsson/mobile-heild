@@ -82,14 +82,22 @@ class LiveHrSession {
 /// can stream and record at once); when its recording is fetched, the live
 /// copy of those seconds is dropped, so nothing is counted twice.
 class LiveHrService extends ChangeNotifier {
-  LiveHrService(this.dc, this.repo, {DateTime Function()? clock})
-    : _clock = clock ?? DateTime.now {
+  LiveHrService(
+    this.dc,
+    this.repo, {
+    DateTime Function()? clock,
+    this.enabled = true,
+  }) : _clock = clock ?? DateTime.now {
     dc.addListener(_onDevice);
   }
 
   final DeviceController dc;
   final Repository repo;
   final DateTime Function() _clock;
+
+  /// False: heart rate that reaches the phone while connected (the sensor
+  /// notifies it during a sync too) is not stored; only recordings are.
+  final bool enabled;
 
   static const flushEvery = Duration(seconds: 60);
 
@@ -106,6 +114,7 @@ class LiveHrService extends ChangeNotifier {
   bool _flushing = false;
 
   void _onDevice() {
+    if (!enabled) return;
     final active = dc.streams[PolarDataType.hr];
     HrSample? s;
     if (active != null) {

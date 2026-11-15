@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../data/repository.dart';
 import '../polar/models.dart';
+import 'features.dart';
 
 /// User settings, persisted in the `settings` table and cached in memory.
 class AppSettings extends ChangeNotifier {
@@ -15,12 +16,9 @@ class AppSettings extends ChangeNotifier {
   String? pairedAddress;
   String? pairedName;
 
-  /// Types recorded on the sensor.
-  Set<PolarDataType> recordTypes = {
-    PolarDataType.hr,
-    PolarDataType.ppi,
-    PolarDataType.acc,
-  };
+  /// Types recorded on the sensor; never outside [supportedTypes], whatever
+  /// an earlier version stored.
+  Set<PolarDataType> recordTypes = {...supportedTypes};
   int accRateHz = 26;
   int accRangeG = 8;
 
@@ -33,9 +31,6 @@ class AppSettings extends ChangeNotifier {
   /// "Sync now" are the triggers.
   bool autoSync = false;
 
-  /// While the app is open and connected, stream PP intervals to the phone
-  /// (pulse quality on the dashboard) instead of recording them on the sensor.
-
   bool get isPaired => pairedDeviceId != null;
 
   Future<void> load() async {
@@ -46,6 +41,7 @@ class AppSettings extends ChangeNotifier {
     if (types != null) {
       recordTypes = (jsonDecode(types) as List)
           .map((e) => PolarDataType.fromWire(e as String))
+          .where(supportedTypes.contains)
           .toSet();
     }
     accRateHz = int.tryParse(await _repo.getSetting('acc_rate_hz') ?? '') ?? 26;
@@ -73,10 +69,10 @@ class AppSettings extends ChangeNotifier {
   }
 
   Future<void> setRecordTypes(Set<PolarDataType> types) async {
-    recordTypes = types;
+    recordTypes = types.where(supportedTypes.contains).toSet();
     await _repo.setSetting(
       'record_types',
-      jsonEncode(types.map((t) => t.wire).toList()),
+      jsonEncode(recordTypes.map((t) => t.wire).toList()),
     );
     notifyListeners();
   }

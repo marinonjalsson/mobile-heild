@@ -9,6 +9,31 @@ Milestone 3: optional Loria sign-in, and upload of every recording (raw samples 
 with the signed-in user's token; mon shows each person their own data at `mon.loria.is/heild/`. MQTT was abandoned
 (2026-11-11).
 
+## Simplified mode (since 2026-11-15)
+
+**The app only syncs.** The sensor records heart rate and movement (ACC); nothing is streamed live; pulse intervals (HRV)
+are neither recorded nor fetched nor shown. Two switches in `lib/state/features.dart` do it: `liveEnabled = false` and
+`supportedTypes = {hr, acc}`. The live and PPI code described below is still there but unreachable; read those parts as
+"how it works when switched back on".
+
+- Why: every sync restarts the sensor's HR recording (about 10 s gap, then the sensor writes 0 for 21 s). A Live session
+  caused a sync on every stop, background and "Sync", so 18 minutes of Live gave 13 short recordings with 40 % zeros
+  (measured on the phone, 2026-11-15).
+- Graphs is one page: heart rate, and under it movement as std of |a|. No type row, no Live button, no |a| mean panel.
+- `AppSettings.recordTypes` is always inside `supportedTypes`; the sync removes pulse interval recordings from the sensor
+  unread (asked for 2026-11-15) and leaves any other unsupported type there; the table hides them; `LiveHrService(enabled: false)` stores nothing.
+- **Recording status** (`SyncService.recording`, `RecordingState`): `paused` once a sync stopped the recordings,
+  `recording` only after the sensor itself lists every wanted type as running (`_confirmRecording`, after the start
+  commands), `failed` when a type is missing (e.g. sensor in the charger) or the sync broke off while paused. Kept in
+  the settings key `recording_status`. `RecordingCard` shows it on Graphs and Device: the wearer waits for "Sensor is
+  recording" before starting an exercise. Green comes `SyncService.recordingSettle` (20 s) after the confirmation,
+  because the first 21 s of heart rate are zeros; until then the card is amber "Recording is starting" (one-shot timer
+  in the card, no periodic tick).
+- Never install a build older than the phone's database: sqflite sets `user_version` back without removing anything,
+  and the next upgrade re-runs its steps (hence `CREATE TABLE IF NOT EXISTS online_log`).
+- The Flutter SDK now refuses AGP 9.1.0 (wants 9.1.1); until `android/settings.gradle*` is bumped, build with
+  `--android-skip-build-dependency-validation`.
+
 ## Layout
 
 - `lib/polar/` — Dart side of the SDK bridge. `polar_bridge.dart` (channels), `models.dart`, `packed_recording.dart`

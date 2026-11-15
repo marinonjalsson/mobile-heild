@@ -12,6 +12,7 @@ import '../polar/models.dart';
 import 'app_settings.dart';
 import 'auth_controller.dart';
 import 'device_controller.dart';
+import 'features.dart';
 import 'live_hr.dart';
 import 'live_ppi.dart';
 import 'online_sync.dart';
@@ -67,11 +68,12 @@ class AppController extends ChangeNotifier {
       await repo.log('warn', 'sign-in state not loaded: $e');
     }
     livePpi = LivePpiService(device.bridge, device, repo, settings);
-    liveHr = LiveHrService(device, repo);
+    liveHr = LiveHrService(device, repo, enabled: liveEnabled);
     sync = SyncService(device.bridge, device, repo, settings, livePpi, liveHr);
+    await sync.loadRecordingStatus();
     livePpi.syncBusy = () => sync.isRunning;
     livePpi.liveWanted = () =>
-        sync.isLive && sync.liveType == PolarDataType.ppi;
+        liveEnabled && sync.isLive && sync.liveType == PolarDataType.ppi;
     livePpi.dataChanged = sync.dataChanged;
     liveHr.dataChanged = sync.dataChanged;
     online = OnlineSyncService(repo, auth, MonClient())

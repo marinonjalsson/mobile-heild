@@ -35,4 +35,6 @@ String typeUnit(PolarDataType t) => switch (t) {
   _ => '',
 };
 
-const viewerTypes = [PolarDataType.hr, PolarDataType.ppi, PolarDataType.acc];
+/// The types the viewer offers (see `supportedTypes`): pulse intervals are
+/// hidden, including what an earlier version stored.
+const viewerTypes = [PolarDataType.hr, PolarDataType.acc];
