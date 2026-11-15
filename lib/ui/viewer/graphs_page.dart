@@ -29,6 +29,25 @@ class _GraphsPageState extends State<GraphsPage> {
   /// "Disconnected" stays on the status line this long after a sync ends.
   static const _endingFor = Duration(seconds: 3);
 
+  /// How the upload to mon ended stays on the status line this long.
+  static const _uploadedFor = Duration(seconds: 8);
+
+  bool _wasUploading = false;
+  bool _uploaded = false;
+  Timer? _uploadedTimer;
+
+  void _onOnline() {
+    final uploading = appController.online.running;
+    if (_wasUploading && !uploading) {
+      _uploadedTimer?.cancel();
+      _uploaded = true;
+      _uploadedTimer = Timer(_uploadedFor, () {
+        if (mounted) setState(() => _uploaded = false);
+      });
+    }
+    _wasUploading = uploading;
+  }
+
   bool _wasActive = false;
   bool _ending = false;
   Timer? _endTimer;
@@ -38,6 +57,7 @@ class _GraphsPageState extends State<GraphsPage> {
   void initState() {
     super.initState();
     appController.sync.addListener(_onSync);
+    appController.online.addListener(_onOnline);
     // Coming back to the app after a while: "the last hour" has moved on.
     // No timer for this: the engine also runs headless, and a tick a minute
     // there would be a wake-up a minute for nobody.
@@ -52,7 +72,9 @@ class _GraphsPageState extends State<GraphsPage> {
   void dispose() {
     _lifecycle.dispose();
     appController.sync.removeListener(_onSync);
+    appController.online.removeListener(_onOnline);
     _endTimer?.cancel();
+    _uploadedTimer?.cancel();
     super.dispose();
   }
 
@@ -162,16 +184,27 @@ class _GraphsPageState extends State<GraphsPage> {
     final sync = appController.sync;
     final dc = appController.device;
     return ListenableBuilder(
-      listenable: Listenable.merge([sync, dc]),
+      listenable: Listenable.merge([sync, dc, appController.online]),
       builder: (context, _) {
         // Inside the builder: while following the present the window moves,
         // and every sync notification is a chance to move it.
         final window = GraphWindow.at(_range, end: _end, now: DateTime.now());
         final fromMs = window.fromMs;
         final toMs = window.toMs;
-        final busy = _active(sync, dc) || _ending;
-        final connecting = !sync.isRunning && _active(sync, dc);
-        final status = _ending && !_active(sync, dc)
+        final online = appController.online;
+        final syncing = _active(sync, dc);
+        // The order the user sees: the sync, "Disconnected", the upload to
+        // mon (which starts only after the disconnect), how the upload went.
+        final uploading = !syncing && !_ending && online.running;
+        final uploaded = !syncing && !_ending && !online.running && _uploaded;
+        final busy = syncing || _ending;
+        final statusShown = busy || uploading || uploaded;
+        final connecting = !sync.isRunning && syncing;
+        final status = uploading
+            ? 'Uploading to mon · ${online.done} of ${online.total}'
+            : uploaded
+            ? 'Upload: ${online.lastMessage}'
+            : _ending && !syncing
             ? 'Disconnected'
             : connecting
             ? 'Connecting…'
@@ -179,13 +212,17 @@ class _GraphsPageState extends State<GraphsPage> {
         return Scaffold(
           appBar: AppBar(
             title: const Text('Heart rate · Movement'),
-            bottom: busy
+            bottom: statusShown
                 ? PreferredSize(
                     preferredSize: const Size.fromHeight(28),
                     child: Column(
                       children: [
                         LinearProgressIndicator(
-                          value: _ending && !_active(sync, dc)
+                          value: uploading
+                              ? (online.total == 0
+                                    ? null
+                                    : online.done / online.total)
+                              : uploaded || (_ending && !syncing)
                               ? 1
                               : sync.progressPercent == null
                               ? null
@@ -199,7 +236,12 @@ class _GraphsPageState extends State<GraphsPage> {
                               status,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: uploaded && !online.lastOk
+                                        ? Theme.of(context).colorScheme.error
+                                        : null,
+                                  ),
                             ),
                           ),
                         ),

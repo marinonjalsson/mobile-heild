@@ -14,8 +14,9 @@ import 'auth_controller.dart';
 ///
 /// Separate from [SyncService] on purpose. That one talks to the sensor over
 /// Bluetooth and must work with no network and no account; this one needs
-/// both and is allowed to fail. It runs after each sensor sync, after a
-/// sign-in, and from "Upload now".
+/// both and is allowed to fail. It runs after each sensor sync, once the
+/// sensor is disconnected, after a sign-in, and from "Upload now"; never
+/// while the phone is talking to the sensor ([sensorBusy]).
 ///
 /// "Sent" is what the phone's retention waits for: a recording older than
 /// the retention period is deleted only once it is marked sent.
@@ -42,6 +43,11 @@ class OnlineSyncService extends ChangeNotifier {
 
   bool _again = false;
 
+  /// The sensor sync is connected or about to be. Uploads wait for it: the
+  /// phone finishes with the sensor first, and the sync starts a run itself
+  /// once it has disconnected.
+  bool Function() sensorBusy = () => false;
+
   /// Recordings mon refused for good (HTTP 400), so they are not offered
   /// again on every run. Kept for the life of the process only: after a
   /// restart they are tried once more, which is how a fix on mon's side
@@ -50,6 +56,12 @@ class OnlineSyncService extends ChangeNotifier {
 
   Future<void> run({String reason = 'manual'}) async {
     if (!_auth.isSignedIn) return;
+    if (sensorBusy()) {
+      lastMessage = 'waiting for the sensor sync to finish';
+      lastOk = true;
+      notifyListeners();
+      return;
+    }
     if (running) {
       _again = true;
       return;

@@ -78,9 +78,21 @@ class AppController extends ChangeNotifier {
     liveHr.dataChanged = sync.dataChanged;
     online = OnlineSyncService(repo, auth, MonClient())
       ..dataChanged = sync.dataChanged;
-    // New recordings go online as soon as the sensor has handed them over,
-    // and whatever is waiting goes when somebody signs in.
-    sync.onSyncDone = () => unawaited(online.run(reason: 'after sync'));
+    // New recordings go online once the phone is done with the sensor and
+    // has disconnected, never during; the foreground service is held until
+    // the upload is over. Whatever is waiting goes when somebody signs in.
+    online.sensorBusy = () => !sync.deviceIdle;
+    sync.afterDevice = () async {
+      if (!auth.isSignedIn) return;
+      unawaited(
+        device.bridge.serviceNotification(
+          'heild · uploading',
+          'Sending recordings to mon',
+        ),
+      );
+      await online.run(reason: 'after sync');
+    };
+    online.addListener(notifyListeners);
     var signedIn = auth.isSignedIn;
     auth.addListener(() {
       if (auth.isSignedIn && !signedIn) {
@@ -106,12 +118,14 @@ class AppController extends ChangeNotifier {
     _ready = true;
     notifyListeners();
     unawaited(sync.applySchedule());
-    // Whatever an earlier run left behind (no network, app closed mid-way).
-    unawaited(online.run(reason: 'app start'));
     if (settings.isPaired) {
-      // Connect, sync, disconnect. The connect attempt gives up after
-      // SyncService.connectTimeout when the sensor is off or away.
+      // Connect, sync, disconnect, and then upload (afterDevice), also when
+      // the sensor is not found: the connect attempt gives up after
+      // SyncService.connectTimeout.
       unawaited(sync.connectAndSync(reason: 'app start'));
+    } else {
+      // Whatever an earlier run left behind (no network, app closed mid-way).
+      unawaited(online.run(reason: 'app start'));
     }
   }
 

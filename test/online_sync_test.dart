@@ -169,6 +169,24 @@ void main() {
     expect(online.lastMessage, isNull);
   });
 
+  test('waits while the phone is talking to the sensor', () async {
+    await repo.storeRecording('24BE2139', hrRecording(day, [60, 61, 62]));
+    await signIn();
+    var busy = true;
+    online.sensorBusy = () => busy;
+
+    await online.run();
+    expect(mon.stored, isEmpty);
+    expect(await repo.unsentCount(), 1);
+    expect(online.running, isFalse);
+    expect(online.lastMessage, 'waiting for the sensor sync to finish');
+
+    busy = false; // disconnected: the sync starts the run itself
+    await online.run(reason: 'after sync');
+    expect(mon.stored, hasLength(1));
+    expect(await repo.unsentCount(), 0);
+  });
+
   test('sends what is waiting, oldest first, and marks it sent', () async {
     final late_ = await repo.storeRecording(
       '24BE2139',

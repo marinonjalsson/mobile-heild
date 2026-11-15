@@ -96,10 +96,27 @@ class SyncService extends ChangeNotifier {
   /// rebuild or a delete. Viewers key their queries on it.
   int dataVersion = 0;
 
-  /// Called after a sync round that finished without error. The app
-  /// controller hangs the online upload on it; this service knows nothing
-  /// about accounts or the network and must keep working without either.
-  VoidCallback? onSyncDone;
+  /// Called once the sensor is done with: after the disconnect that ends a
+  /// sync (or a connect attempt that came to nothing) has completed, and
+  /// before the foreground service is released, so the work survives in the
+  /// background. The app controller hangs the online upload on it; this
+  /// service knows nothing about accounts or the network and keeps working
+  /// without either. It waits for the hook at most [afterDeviceLimit], and a
+  /// new sync trigger never waits for it at all.
+  Future<void> Function()? afterDevice;
+
+  /// How long the foreground service is held for [afterDevice].
+  static const afterDeviceLimit = Duration(minutes: 3);
+
+  /// [afterDevice] is running; the idle fallback must not release the
+  /// service under it.
+  bool _finishing = false;
+
+  /// Nothing is being said to the sensor and nothing is about to be.
+  bool get deviceIdle =>
+      !_running &&
+      !_syncOnReady &&
+      dc.connection == PolarConnectionState.disconnected;
 
   /// Tells viewers that stored data changed outside a sync.
   void dataChanged() {
@@ -481,7 +498,6 @@ class SyncService extends ChangeNotifier {
         'info',
         'sync done: $lastRunRecordings recordings, $lastRunSamples samples',
       );
-      onSyncDone?.call();
     } catch (e) {
       lastError = '$e';
       _setPhase(SyncPhase.error, '$e');
@@ -748,27 +764,61 @@ class SyncService extends ChangeNotifier {
       // Another run follows at once; decide after it.
     } else if (liveRequested && dc.isConnected) {
       unawaited(_ensureLiveStreams());
-    } else if (dc.connection != PolarConnectionState.disconnected) {
-      unawaited(_rest());
     } else {
-      unawaited(bridge.serviceIdle());
+      unawaited(_rest());
     }
     notifyListeners();
   }
 
-  /// Disconnects and releases the foreground service: nothing runs until
-  /// the next trigger. The sync result stays on the dashboard.
+  /// Disconnects, waits until the sensor is really gone, runs [afterDevice]
+  /// and only then releases the foreground service: nothing runs until the
+  /// next trigger. The sync result stays on the dashboard.
   Future<void> _rest() async {
     _connectTimeout?.cancel();
     _idle?.cancel();
-    try {
-      await bridge.setAutomaticReconnection(false);
-      await dc.disconnect();
-    } catch (e) {
-      _log('warn', 'disconnect: $e');
+    if (dc.connection != PolarConnectionState.disconnected) {
+      try {
+        await bridge.setAutomaticReconnection(false);
+        await dc.disconnect();
+      } catch (e) {
+        _log('warn', 'disconnect: $e');
+      }
+      await _untilDisconnected();
     }
-    await bridge.serviceIdle();
     notifyListeners();
+    final hook = afterDevice;
+    if (hook != null && deviceIdle && !_finishing) {
+      _finishing = true;
+      try {
+        await hook().timeout(afterDeviceLimit);
+      } catch (e) {
+        _log('warn', 'after the sync: $e');
+      } finally {
+        _finishing = false;
+      }
+    }
+    // A trigger that arrived meanwhile owns the service now.
+    if (deviceIdle) await bridge.serviceIdle();
+    notifyListeners();
+  }
+
+  /// Completes when the disconnect event has arrived (10 s at most).
+  Future<void> _untilDisconnected() async {
+    bool gone() => dc.connection == PolarConnectionState.disconnected;
+    if (gone()) return;
+    final done = Completer<void>();
+    void check() {
+      if (gone() && !done.isCompleted) done.complete();
+    }
+
+    dc.addListener(check);
+    try {
+      await done.future.timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      _log('warn', 'no disconnect event within 10 s');
+    } finally {
+      dc.removeListener(check);
+    }
   }
 
   /// Fallback for disconnects we did not ask for: release the service once
@@ -776,7 +826,7 @@ class SyncService extends ChangeNotifier {
   void _scheduleIdleCheck() {
     _idle?.cancel();
     _idle = Timer(const Duration(seconds: 20), () async {
-      if (!_running && !dc.isConnected && !liveRequested) {
+      if (!_running && !dc.isConnected && !liveRequested && !_finishing) {
         if (phase != SyncPhase.done && phase != SyncPhase.error) {
           _setPhase(
             settings.isPaired ? SyncPhase.waitingForDevice : SyncPhase.idle,

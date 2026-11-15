@@ -201,6 +201,46 @@ class _SensorCard extends StatelessWidget {
             ),
           ],
         ),
+        // How the upload to mon went; it starts once the sensor is
+        // disconnected. Nothing here when nobody is signed in.
+        if (appController.auth.isSignedIn &&
+            (appController.online.running ||
+                appController.online.lastRunAt != null))
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              children: [
+                Icon(
+                  appController.online.running
+                      ? Icons.cloud_upload_outlined
+                      : appController.online.lastOk
+                      ? Icons.cloud_done_outlined
+                      : Icons.cloud_off_outlined,
+                  size: 18,
+                  color:
+                      !appController.online.running &&
+                          !appController.online.lastOk
+                      ? scheme.error
+                      : null,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    appController.online.running
+                        ? 'Uploading to mon · ${appController.online.done} of '
+                              '${appController.online.total}'
+                        : 'Upload ${fmtAgo(appController.online.lastRunAt)} · '
+                              '${appController.online.lastMessage}',
+                    style:
+                        !appController.online.running &&
+                            !appController.online.lastOk
+                        ? TextStyle(color: scheme.error)
+                        : null,
+                  ),
+                ),
+              ],
+            ),
+          ),
         if (busy) ...[
           const SizedBox(height: 6),
           LinearProgressIndicator(

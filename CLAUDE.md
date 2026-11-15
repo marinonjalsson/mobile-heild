@@ -151,9 +151,15 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
 - `online_log` (schema v4; kind `auth` | `push`, ok, message) is the history on the Online tab.
 - **Upload** (`OnlineSyncService.run`): every recording with `sent_ms` unset, of type HR/PPI/ACC and not `source = 'live'`
   (`Repository.unsentRecordings`), oldest first, one `POST https://mon.loria.is/api/heild/upload` each with
-  `Authorization: Bearer <access token>`; on 200 `markSent`, which is what retention waits for. Triggers: after each
-  sensor sync that finished (`SyncService.onSyncDone`), on sign-in, at app start, and "Upload now". Single run at a time.
-  `SyncService` knows nothing of it and must never wait for it.
+  `Authorization: Bearer <access token>`; on 200 `markSent`, which is what retention waits for. **The sensor first, mon
+  after (2026-11-15):** `SyncService._rest` disconnects, waits for the disconnect event, then awaits the hook
+  `afterDevice` (the app controller's upload) for at most 3 minutes, and only then releases the foreground service, so a
+  scheduled upload survives in the background. The hook runs after every end of sensor communication, also a failed
+  sync or a sensor that was not found. Other triggers: sign-in, "Upload now", app start when no sensor is paired; while
+  the phone is connecting or connected `OnlineSyncService.sensorBusy` makes a run step aside ("waiting for the sensor
+  sync to finish"). Single run at a time. `SyncService` knows nothing of accounts or the network, and a new sync
+  trigger never waits for the hook. The result is shown where the sync is: the Graphs status line goes sync →
+  "Disconnected" → "Uploading to mon · n of m" → "Upload: …" (8 s), and the Device tab keeps an "Upload … " line.
 - The body (`buildUpload`) carries the recording, its raw samples as parallel lists (ACC as the zlib chunks, base64) and
   the `minute_stats` rows of the minutes it covers. **It never names the person**: mon takes that from the token
   (userinfo) and requires the `heild_user` group. The other end is `web/sites/mon/api/lib/heild.dart`; the two must
