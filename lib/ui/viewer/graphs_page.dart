@@ -198,7 +198,16 @@ class _GraphsPageState extends State<GraphsPage> {
         final uploading = !syncing && !_ending && online.running;
         final uploaded = !syncing && !_ending && !online.running && _uploaded;
         final busy = syncing || _ending;
-        final statusShown = busy || uploading || uploaded;
+        // A sync that could not even start because Bluetooth is off never
+        // becomes "busy"; without this line a tap on Sync would show nothing.
+        // It stays until the next attempt.
+        final bluetoothOff =
+            !busy &&
+            !uploading &&
+            !uploaded &&
+            sync.phase == SyncPhase.error &&
+            sync.detail == SyncService.bluetoothOffText;
+        final statusShown = busy || uploading || uploaded || bluetoothOff;
         final connecting = !sync.isRunning && syncing;
         final status = uploading
             ? 'Uploading to mon · ${online.done} of ${online.total}'
@@ -218,7 +227,9 @@ class _GraphsPageState extends State<GraphsPage> {
                     child: Column(
                       children: [
                         LinearProgressIndicator(
-                          value: uploading
+                          value: bluetoothOff
+                              ? 0
+                              : uploading
                               ? (online.total == 0
                                     ? null
                                     : online.done / online.total)
@@ -238,7 +249,9 @@ class _GraphsPageState extends State<GraphsPage> {
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
-                                    color: uploaded && !online.lastOk
+                                    color:
+                                        bluetoothOff ||
+                                            (uploaded && !online.lastOk)
                                         ? Theme.of(context).colorScheme.error
                                         : null,
                                   ),

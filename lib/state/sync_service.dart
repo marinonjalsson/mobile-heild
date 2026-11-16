@@ -421,8 +421,13 @@ class SyncService extends ChangeNotifier {
     _connectTimeout = Timer(connectTimeout, () async {
       if (dc.isConnected || _running) return;
       _syncOnReady = false;
-      _log('warn', 'sensor not found within ${connectTimeout.inSeconds} s');
-      _setPhase(SyncPhase.error, 'Sensor not in range');
+      if (await _bluetoothOff()) {
+        _log('warn', 'Bluetooth was switched off while connecting');
+        _setPhase(SyncPhase.error, bluetoothOffText);
+      } else {
+        _log('warn', 'sensor not found within ${connectTimeout.inSeconds} s');
+        _setPhase(SyncPhase.error, 'Sensor not in range');
+      }
       if (liveRequested) {
         liveRequested = false;
         notifyListeners();
@@ -432,11 +437,37 @@ class SyncService extends ChangeNotifier {
     });
   }
 
+  static const bluetoothOffText = 'Bluetooth is off. Switch it on to sync.';
+
+  /// The phone's Bluetooth is switched off. A failed question counts as on,
+  /// so the connect attempt still decides.
+  Future<bool> _bluetoothOff() async {
+    try {
+      return !await bridge.bluetoothEnabled();
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Connects to the paired sensor (or [deviceId]) and syncs once ready.
   Future<void> connectAndSync({String? deviceId, String reason = ''}) async {
     final id = deviceId ?? settings.pairedDeviceId;
     if (id == null) {
       _setPhase(SyncPhase.error, 'No sensor paired');
+      return;
+    }
+    if (!dc.isConnected && await _bluetoothOff()) {
+      // Say so at once instead of scanning for [connectTimeout] and
+      // reporting a sensor that is "not in range".
+      _log('warn', 'Bluetooth is off${reason.isEmpty ? '' : ' ($reason)'}');
+      _syncOnReady = false;
+      _setPhase(SyncPhase.error, bluetoothOffText);
+      if (liveRequested) {
+        liveRequested = false;
+        notifyListeners();
+      }
+      if (_restartOwed) await _armRetry();
+      await _rest();
       return;
     }
     _idle?.cancel();
@@ -594,10 +625,7 @@ class SyncService extends ChangeNotifier {
       _log('error', 'sync failed: $e');
       if (recording == RecordingState.paused) {
         // Stopped for the fetch and never confirmed running again.
-        await _setRecording(
-          RecordingState.failed,
-          problem: _interrupted,
-        );
+        await _setRecording(RecordingState.failed, problem: _interrupted);
         _restartOwed = true;
       }
       if (_restartOwed) await _armRetry();

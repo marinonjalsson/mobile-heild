@@ -85,7 +85,8 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   alarm, `setAndAllowWhileIdle`, re-armed on each fire and after boot; `HeildService` started with the `sync` extra sends
   the app event `scheduledSync` to Dart), app start, app coming to the foreground with data older than 30 min, "Sync now",
   and optionally presence (`autoSync`, off by default). A connect attempt gives up after `connectTimeout` (90 s) so the
-  SDK never scans for an absent sensor for long.
+  SDK never scans for an absent sensor for long. With the phone's Bluetooth switched off (`bridge.bluetoothEnabled`,
+  asked of Android) no attempt is made: the sync ends at once with "Bluetooth is off. Switch it on to sync."
 - One sync round (`SyncService._run`): set clock → stop running recordings → list → restart recordings + ensure trigger →
   fetch packed → `Repository.storeRecording` → delete on sensor → retention. Never fatal: errors are logged to `sync_log` and
   retried on the next trigger.
@@ -101,7 +102,8 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
     series again. A sync that confirms recording puts the alarm back on the schedule (`_clearRetry`). The retry alarm
     also fires when the scheduled sync is switched off.
   - When a series is used up the phone shows the notification "Sensor is not recording" (`bridge.alert` → Kotlin
-    `service/Alert.kt`, channel `heild.alert`, audible, tap opens the app); every sync that confirms recording
+    `service/Alert.kt`, tap opens the app; channel `heild.alert` is audible, between 22:00 and 08:00 the silent
+    `heild.alert.quiet` is used instead); every sync that confirms recording
     removes it (`alertClear`).
 - Live session (`SyncService.startLive(type)/setLiveType/stopLive`, "Live"/"Stop" in the Graphs type row): the only way to
   stay connected. The stream follows the selected graph (`liveType`): Heart rate → HR stream, HRV → PP intervals via

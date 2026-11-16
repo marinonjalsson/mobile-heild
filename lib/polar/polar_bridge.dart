@@ -137,6 +137,11 @@ class PolarBridge {
   Future<void> serviceNotification(String title, String text) =>
       _call<void>('serviceNotification', {'title': title, 'text': text});
 
+  /// Whether the phone's Bluetooth is switched on (asked of Android, not
+  /// taken from the SDK's change events, which say nothing until a change).
+  Future<bool> bluetoothEnabled() async =>
+      await _call<bool>('bluetoothEnabled') ?? true;
+
   /// Shows the "needs attention" notification (its own, audible channel).
   Future<void> alert(String title, String text) =>
       _call<void>('alert', {'title': title, 'text': text});

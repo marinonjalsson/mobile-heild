@@ -243,6 +243,10 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
                 HeildService.instance?.updateNotification(a.str("title"), a.str("text"))
                 result.success(null)
             }
+            "bluetoothEnabled" -> {
+                val adapter = appContext.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
+                result.success(adapter?.isEnabled == true)
+            }
             "alert" -> { Alert.show(appContext, a.str("title"), a.str("text")); result.success(null) }
             "alertClear" -> { Alert.clear(appContext); result.success(null) }
             "companionAssociatedAddresses" -> run(result) { api.getAssociatedDeviceAddresses() }
