@@ -31,8 +31,8 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   in the card, no periodic tick).
 - Never install a build older than the phone's database: sqflite sets `user_version` back without removing anything,
   and the next upgrade re-runs its steps (hence `CREATE TABLE IF NOT EXISTS online_log`).
-- The Flutter SDK now refuses AGP 9.1.0 (wants 9.1.1); until `android/settings.gradle*` is bumped, build with
-  `--android-skip-build-dependency-validation`.
+- AGP is 9.1.1 (bumped 2026-11-18, the Flutter SDK refused 9.1.0). The build only warns now: Flutter will soon want
+  Gradle 9.5.0, AGP 9.3.1 and Kotlin 2.4.20.
 
 ## Layout
 
