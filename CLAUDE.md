@@ -5,8 +5,8 @@ Milestone 1: full control of the Polar Verity Sense via the **official Polar BLE
 Milestone 2: "wear it, forget it" — the sensor records HR/PPI/ACC on its own (offline recording,
 trigger on power-on); Android's Companion Device Manager wakes the app when the sensor is in range;
 the app syncs the recordings into SQLite and shows graphs/tables.
-Milestone 3: optional Loria sign-in, and upload of every recording (raw samples + minute stats) to `mon` over HTTPS
-with the signed-in user's token; mon shows each person their own data at `mon.loria.is/heild/`. MQTT was abandoned
+Milestone 3: optional Loria sign-in, and upload of every recording (raw samples + minute stats) to the heild site (`heild.loria.is`, repo `web/sites/heild`) over HTTPS
+with the signed-in user's token; the site shows each person their own data at `heild.loria.is`. MQTT was abandoned
 (2026-11-11).
 
 ## Simplified mode (since 2026-11-15)
@@ -40,8 +40,8 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   (typed-array form of a fetched recording), `polar_errors.dart`. No UI here.
 - `lib/auth/` — the Loria sign-in, no UI: `oidc.dart` (`OidcConfig`, token/userinfo/revocation over plain HTTPS),
   `authorizer.dart` (the browser part, flutter_appauth), `token_store.dart` (refresh token in the Android Keystore).
-- `lib/online/` — the upload to mon, no UI: `upload_payload.dart` (`buildUpload`: one recording as mon takes it),
-  `mon_client.dart` (`POST /api/heild/upload`, `MonException`).
+- `lib/online/` — the upload to the server, no UI: `upload_payload.dart` (`buildUpload`: one recording as the server takes it),
+  `upload_client.dart` (`POST /api/upload`, `UploadException`).
 - `lib/data/` — SQLite: `db.dart` (schema), `repository.dart` (ingest, minute stats, queries, retention),
   `polar_time.dart` (Polar ns since 2000 → Unix ms, HR/PPI timestamp derivation), `acc_codec.dart` (zlib int16 chunks).
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
@@ -166,8 +166,8 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   expiry: the session is kept and `accessToken()` returns null with `lastError` set.
 - `online_log` (schema v4; kind `auth` | `push`, ok, message) is the history on the Online tab.
 - **Upload** (`OnlineSyncService.run`): every recording with `sent_ms` unset, of type HR/PPI/ACC and not `source = 'live'`
-  (`Repository.unsentRecordings`), oldest first, one `POST https://mon.loria.is/api/heild/upload` each with
-  `Authorization: Bearer <access token>`; on 200 `markSent`, which is what retention waits for. **The sensor first, mon
+  (`Repository.unsentRecordings`), oldest first, one `POST https://heild.loria.is/api/upload` each with
+  `Authorization: Bearer <access token>`; on 200 `markSent`, which is what retention waits for. **The sensor first, the server
   after (2026-11-15):** `SyncService._rest` disconnects, waits for the disconnect event, then awaits the hook
   `afterDevice` (the app controller's upload) for at most 3 minutes, and only then releases the foreground service, so a
   scheduled upload survives in the background. The hook runs after every end of sensor communication, also a failed
@@ -175,19 +175,19 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   the phone is connecting or connected `OnlineSyncService.sensorBusy` makes a run step aside ("waiting for the sensor
   sync to finish"). Single run at a time. `SyncService` knows nothing of accounts or the network, and a new sync
   trigger never waits for the hook. The result is shown where the sync is: the Graphs status line goes sync →
-  "Disconnected" → "Uploading to mon · n of m" → "Upload: …" (8 s), and the Device tab keeps an "Upload … " line.
+  "Disconnected" → "Uploading · n of m" → "Upload: …" (8 s), and the Device tab keeps an "Upload … " line.
 - The body (`buildUpload`) carries the recording, its raw samples as parallel lists (ACC as the zlib chunks, base64) and
-  the `minute_stats` rows of the minutes it covers. **It never names the person**: mon takes that from the token
-  (userinfo) and requires the `heild_user` group. The other end is `web/sites/mon/api/lib/heild.dart`; the two must
+  the `minute_stats` rows of the minutes it covers. **It never names the person**: the server takes that from the token
+  (userinfo) and requires the `heild_user` group. The other end is `web/sites/heild/api/lib/upload.dart`; the two must
   change together.
-- mon's answers are a contract: 200 sent; 400/413 this recording is refused for good (skipped for the life of the
+- The server's answers are a contract: 200 sent; 400/413 this recording is refused for good (skipped for the life of the
   process, logged, the rest still go); 401 refresh once and retry, then stop; 403 stop — not in the group, **or a session
-  from before the `groups` scope** (mon sees no groups in it; sign out and in once); anything else or no network: stop,
+  from before the `groups` scope** (the server sees no groups in it; sign out and in once); anything else or no network: stop,
   retry at the next trigger. One `push` history row per run that sent or failed something.
 - Not uploaded: live sessions (the sensor's own recording replaces them). A headless upload after a scheduled sync runs
   only as long as the process lives after `serviceIdle`; whatever is cut short goes with the next run (uploads are
-  idempotent on mon).
-- Tested 2026-11-11 against a local mon + Authelia 4.39.14 with a real token: HR, PPI and ACC accepted, re-upload
+  idempotent on the server).
+- Tested 2026-11-11 against a local mon (where the upload endpoint lived until 2026-11) + Authelia 4.39.14 with a real token: HR, PPI and ACC accepted, re-upload
   idempotent, another member sees nothing of it.
 
 ## Build / run
@@ -200,4 +200,4 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
 
 ## Out of scope for now
 
-iOS, MQTT (abandoned; upload to mon is HTTPS, see milestone 3), AES-secured recordings, H10/watch-only APIs.
+iOS, MQTT (abandoned; upload to the server is HTTPS, see milestone 3), AES-secured recordings, H10/watch-only APIs.

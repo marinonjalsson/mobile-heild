@@ -201,7 +201,7 @@ class _SensorCard extends StatelessWidget {
             ),
           ],
         ),
-        // How the upload to mon went; it starts once the sensor is
+        // How the upload to the server went; it starts once the sensor is
         // disconnected. Nothing here when nobody is signed in.
         if (appController.auth.isSignedIn &&
             (appController.online.running ||
@@ -227,7 +227,7 @@ class _SensorCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     appController.online.running
-                        ? 'Uploading to mon · ${appController.online.done} of '
+                        ? 'Uploading · ${appController.online.done} of '
                               '${appController.online.total}'
                         : 'Upload ${fmtAgo(appController.online.lastRunAt)} · '
                               '${appController.online.lastMessage}',
@@ -312,7 +312,7 @@ class _StorageCard extends StatelessWidget {
               '${latest == null ? '' : ' · latest ${fmtMs(latest.startMs)}'}',
             ),
             Text(
-              'Kept ${appController.settings.retentionDays} days once sent to mon.',
+              'Kept ${appController.settings.retentionDays} days once uploaded.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],

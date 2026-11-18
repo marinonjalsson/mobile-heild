@@ -7,7 +7,7 @@ import '../auth/oidc.dart';
 import '../auth/token_store.dart';
 import '../data/db.dart';
 import '../data/repository.dart';
-import '../online/mon_client.dart';
+import '../online/upload_client.dart';
 import '../polar/models.dart';
 import 'app_settings.dart';
 import 'auth_controller.dart';
@@ -35,7 +35,7 @@ class AppController extends ChangeNotifier {
   /// The optional Loria sign-in (Online tab). Only online sync depends on it.
   late final AuthController auth;
 
-  /// Upload of recordings to mon. Does nothing unless somebody is signed in.
+  /// Upload of recordings to the server. Does nothing unless somebody is signed in.
   late final OnlineSyncService online;
   AppLifecycleListener? _lifecycle;
 
@@ -76,7 +76,7 @@ class AppController extends ChangeNotifier {
         liveEnabled && sync.isLive && sync.liveType == PolarDataType.ppi;
     livePpi.dataChanged = sync.dataChanged;
     liveHr.dataChanged = sync.dataChanged;
-    online = OnlineSyncService(repo, auth, MonClient())
+    online = OnlineSyncService(repo, auth, UploadClient())
       ..dataChanged = sync.dataChanged;
     // New recordings go online once the phone is done with the sensor and
     // has disconnected, never during; the foreground service is held until
@@ -87,7 +87,7 @@ class AppController extends ChangeNotifier {
       unawaited(
         device.bridge.serviceNotification(
           'heild · uploading',
-          'Sending recordings to mon',
+          'Sending recordings to the server',
         ),
       );
       await online.run(reason: 'after sync');

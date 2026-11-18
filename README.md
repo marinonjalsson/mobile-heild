@@ -52,7 +52,7 @@ Two milestones are in:
   rate and PP intervals streamed to the phone are stored once a minute, so the charts show them
   right away. The sensor's own HR recording replaces the live copy of the same seconds when it is
   fetched. Recordings older
-  than 30 days (configurable) are deleted **only once marked as sent to mon**; until MQTT export
+  than 30 days (configurable) are deleted **only once marked as sent to heild.loria.is**; until MQTT export
   exists, the mark is a manual toggle on each recording.
 
 Phone setup that helps: allow notifications when asked, and exclude heild from battery

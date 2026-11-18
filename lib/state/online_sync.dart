@@ -3,12 +3,12 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../data/repository.dart';
-import '../online/mon_client.dart';
+import '../online/upload_client.dart';
 import '../online/upload_payload.dart';
 import 'auth_controller.dart';
 
-/// Sends recordings to mon: every recording the sensor made that has not
-/// been sent yet, oldest first, one request each, marked sent when mon says
+/// Sends recordings to the server: every recording the sensor made that has not
+/// been sent yet, oldest first, one request each, marked sent when the server says
 /// it has it. Only when somebody is signed in; without that this does
 /// nothing and nothing else in the app notices.
 ///
@@ -21,11 +21,11 @@ import 'auth_controller.dart';
 /// "Sent" is what the phone's retention waits for: a recording older than
 /// the retention period is deleted only once it is marked sent.
 class OnlineSyncService extends ChangeNotifier {
-  OnlineSyncService(this._repo, this._auth, this._mon);
+  OnlineSyncService(this._repo, this._auth, this._uploads);
 
   final Repository _repo;
   final AuthController _auth;
-  final MonClient _mon;
+  final UploadClient _uploads;
 
   /// Called after a run that sent something (the table shows what is sent).
   VoidCallback? dataChanged;
@@ -48,9 +48,9 @@ class OnlineSyncService extends ChangeNotifier {
   /// once it has disconnected.
   bool Function() sensorBusy = () => false;
 
-  /// Recordings mon refused for good (HTTP 400), so they are not offered
+  /// Recordings the server refused for good (HTTP 400), so they are not offered
   /// again on every run. Kept for the life of the process only: after a
-  /// restart they are tried once more, which is how a fix on mon's side
+  /// restart they are tried once more, which is how a fix on the server's side
   /// reaches them.
   final _rejected = <int>{};
 
@@ -97,7 +97,7 @@ class OnlineSyncService extends ChangeNotifier {
               refused++;
               await _repo.onlineLog(
                 'push',
-                'mon refused ${r.type.label} of '
+                'The server refused ${r.type.label} of '
                     '${DateTime.fromMillisecondsSinceEpoch(r.startMs)}: $why',
                 ok: false,
               );
@@ -145,8 +145,8 @@ class OnlineSyncService extends ChangeNotifier {
     final body = await buildUpload(_repo, r);
     for (var attempt = 0; ; attempt++) {
       try {
-        return _Sent(await _mon.upload(token!, body));
-      } on MonException catch (e) {
+        return _Sent(await _uploads.upload(token!, body));
+      } on UploadException catch (e) {
         if (e.isUnauthorized && attempt == 0) {
           // The access token ran out between the check and the request, or
           // was revoked. A fresh one settles which.
@@ -157,17 +157,17 @@ class OnlineSyncService extends ChangeNotifier {
         if (e.isRejected) return _Refused(e.message);
         if (e.isForbidden) {
           // Also what a sign-in from before the app asked for the `groups`
-          // scope gets: mon cannot see the group in it.
+          // scope gets: the server cannot see the group in it.
           return _Stopped(
             '${e.message}. If you are in the group, sign out and sign in '
             'again.',
           );
         }
-        return _Stopped('mon: ${e.message}');
+        return _Stopped('Server: ${e.message}');
       } on TimeoutException {
-        return const _Stopped('mon did not answer');
+        return const _Stopped('The server did not answer');
       } catch (e) {
-        return _Stopped('mon could not be reached ($e)');
+        return _Stopped('The server could not be reached ($e)');
       }
     }
   }
@@ -190,7 +190,7 @@ class _Sent extends _Outcome {
   final int bytes_;
 }
 
-/// mon will not take this recording; go on with the next.
+/// The server will not take this recording; go on with the next.
 class _Refused extends _Outcome {
   const _Refused(this.why);
   final String why;

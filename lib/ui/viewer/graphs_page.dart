@@ -29,7 +29,7 @@ class _GraphsPageState extends State<GraphsPage> {
   /// "Disconnected" stays on the status line this long after a sync ends.
   static const _endingFor = Duration(seconds: 3);
 
-  /// How the upload to mon ended stays on the status line this long.
+  /// How the upload to the server ended stays on the status line this long.
   static const _uploadedFor = Duration(seconds: 8);
 
   bool _wasUploading = false;
@@ -194,7 +194,7 @@ class _GraphsPageState extends State<GraphsPage> {
         final online = appController.online;
         final syncing = _active(sync, dc);
         // The order the user sees: the sync, "Disconnected", the upload to
-        // mon (which starts only after the disconnect), how the upload went.
+        // the server (which starts only after the disconnect), how the upload went.
         final uploading = !syncing && !_ending && online.running;
         final uploaded = !syncing && !_ending && !online.running && _uploaded;
         final busy = syncing || _ending;
@@ -210,7 +210,7 @@ class _GraphsPageState extends State<GraphsPage> {
         final statusShown = busy || uploading || uploaded || bluetoothOff;
         final connecting = !sync.isRunning && syncing;
         final status = uploading
-            ? 'Uploading to mon · ${online.done} of ${online.total}'
+            ? 'Uploading · ${online.done} of ${online.total}'
             : uploaded
             ? 'Upload: ${online.lastMessage}'
             : _ending && !syncing

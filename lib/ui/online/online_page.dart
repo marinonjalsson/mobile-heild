@@ -225,7 +225,7 @@ class _OnlineSync extends StatelessWidget {
                     ? '${snap.data} recordings'
                     : '…',
                 if (at != null) 'Last run': fmtAgo(at),
-                'Goes to': 'mon.loria.is/heild',
+                'Goes to': 'heild.loria.is',
               }),
               if (online.running) ...[
                 const SizedBox(height: 8),

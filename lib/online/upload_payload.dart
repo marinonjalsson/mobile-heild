@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import '../data/repository.dart';
 import '../polar/models.dart';
 
-/// The name mon knows a recording type by, or null for a type that is not
+/// The name the server knows a recording type by, or null for a type that is not
 /// uploaded (only heart rate, pulse intervals and movement are stored).
 String? monType(PolarDataType t) => switch (t) {
   PolarDataType.hr => 'hr',
@@ -19,12 +19,12 @@ final uploadedWireTypes = [
     if (monType(t) != null) t.wire,
 ];
 
-/// One recording as `POST /api/heild/upload` on mon takes it (see
-/// `web/sites/mon/api/lib/heild.dart`, which is the other end of this):
+/// One recording as `POST /api/upload` on heild.loria.is takes it (see
+/// `web/sites/heild/api/lib/upload.dart`, which is the other end of this):
 /// the recording, all of its raw samples, and the per-minute statistics of
 /// the minutes it covers.
 ///
-/// Nothing here says whose recording it is. mon takes that from the token.
+/// Nothing here says whose recording it is. The server takes that from the token.
 ///
 /// Times are Unix milliseconds. Samples go as parallel lists, one per
 /// column, which is a third the size of a list of objects. Movement goes as
@@ -97,7 +97,7 @@ Future<Map<String, Object?>> buildUpload(
 
   // The minutes this recording touches. A minute's figures are computed over
   // everything stored for it, so a minute shared with a neighbouring
-  // recording is sent with both and mon keeps the newer copy, which is the
+  // recording is sent with both and the server keeps the newer copy, which is the
   // same numbers.
   final minutes = await db.rawQuery(
     'SELECT minute_ms, n, mean, min, max, extra FROM minute_stats '

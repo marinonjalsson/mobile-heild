@@ -8,7 +8,7 @@ import 'package:heild/data/acc_codec.dart';
 import 'package:heild/data/db.dart';
 import 'package:heild/data/polar_time.dart';
 import 'package:heild/data/repository.dart';
-import 'package:heild/online/mon_client.dart';
+import 'package:heild/online/upload_client.dart';
 import 'package:heild/online/upload_payload.dart';
 import 'package:heild/polar/models.dart';
 import 'package:heild/polar/packed_recording.dart';
@@ -67,9 +67,9 @@ PackedRecording accRecording(DateTime start, int seconds, int rateHz) {
   );
 }
 
-/// mon's upload endpoint, as far as the app can tell: it knows one good
+/// the site's upload endpoint, as far as the app can tell: it knows one good
 /// token and answers the way the real one was seen to.
-class FakeMon {
+class FakeServer {
   String goodToken = 'at-1';
   bool down = false;
 
@@ -83,7 +83,7 @@ class FakeMon {
 
   late final client = MockClient((req) async {
     if (down) throw http.ClientException('connection refused');
-    expect(req.url.toString(), 'https://mon.loria.is/api/heild/upload');
+    expect(req.url.toString(), 'https://heild.loria.is/api/upload');
     final token = req.headers['Authorization']!.substring('Bearer '.length);
     tokensSeen.add(token);
     http.Response no(int status, String error, String message) =>
@@ -106,7 +106,7 @@ void main() {
 
   late HeildDb db;
   late Repository repo;
-  late FakeMon mon;
+  late FakeServer server;
   late AuthController auth;
   late OnlineSyncService online;
   var refreshes = 0;
@@ -124,10 +124,10 @@ void main() {
       path: inMemoryDatabasePath,
     );
     repo = Repository(db);
-    mon = FakeMon();
+    server = FakeServer();
     refreshes = 0;
     // The sign-in service: userinfo for the sign-in, and a refresh that
-    // hands out the token mon currently accepts.
+    // hands out the token the server currently accepts.
     final authelia = MockClient((req) async {
       if (req.url.path.endsWith('/userinfo')) {
         return http.Response(jsonEncode({'preferred_username': 'marino'}), 200);
@@ -136,7 +136,7 @@ void main() {
         refreshes++;
         return http.Response(
           jsonEncode({
-            'access_token': mon.goodToken,
+            'access_token': server.goodToken,
             'refresh_token': 'rt-next',
             'expires_in': 3600,
           }),
@@ -155,7 +155,7 @@ void main() {
         expiresAt: DateTime.now().add(const Duration(hours: 1)),
       ),
     );
-    online = OnlineSyncService(repo, auth, MonClient(client: mon.client));
+    online = OnlineSyncService(repo, auth, UploadClient(client: server.client));
   });
 
   tearDown(() => db.close());
@@ -164,7 +164,7 @@ void main() {
     await auth.load();
     await repo.storeRecording('24BE2139', hrRecording(day, [60, 61, 62]));
     await online.run();
-    expect(mon.tokensSeen, isEmpty);
+    expect(server.tokensSeen, isEmpty);
     expect(await repo.unsentCount(), 1);
     expect(online.lastMessage, isNull);
   });
@@ -176,14 +176,14 @@ void main() {
     online.sensorBusy = () => busy;
 
     await online.run();
-    expect(mon.stored, isEmpty);
+    expect(server.stored, isEmpty);
     expect(await repo.unsentCount(), 1);
     expect(online.running, isFalse);
     expect(online.lastMessage, 'waiting for the sensor sync to finish');
 
     busy = false; // disconnected: the sync starts the run itself
     await online.run(reason: 'after sync');
-    expect(mon.stored, hasLength(1));
+    expect(server.stored, hasLength(1));
     expect(await repo.unsentCount(), 0);
   });
 
@@ -199,11 +199,11 @@ void main() {
     await signIn();
     await online.run();
 
-    expect(mon.stored.map((b) => b['start_ms']), [
+    expect(server.stored.map((b) => b['start_ms']), [
       day.millisecondsSinceEpoch,
       day.add(const Duration(hours: 2)).millisecondsSinceEpoch,
     ]);
-    expect(mon.tokensSeen.toSet(), {'at-1'});
+    expect(server.tokensSeen.toSet(), {'at-1'});
     expect((await repo.recording(early))!.sent, isTrue);
     expect((await repo.recording(late_))!.sent, isTrue);
     expect(await repo.unsentCount(), 0);
@@ -219,7 +219,7 @@ void main() {
     // A second run has nothing to do and writes no history.
     final before = (await repo.onlineHistory()).length;
     await online.run();
-    expect(mon.stored.length, 2);
+    expect(server.stored.length, 2);
     expect((await repo.onlineHistory()).length, before);
     expect(online.lastMessage, 'nothing to send');
   });
@@ -233,7 +233,7 @@ void main() {
     await signIn();
     await online.run();
 
-    final b = mon.stored.single;
+    final b = server.stored.single;
     expect(b['type'], 'hr');
     expect(b['device_id'], '24BE2139');
     expect(b['source'], 'offline');
@@ -258,13 +258,13 @@ void main() {
     await signIn();
     await online.run();
 
-    final ppi = mon.stored.firstWhere((b) => b['type'] == 'ppi');
+    final ppi = server.stored.firstWhere((b) => b['type'] == 'ppi');
     final p = ppi['ppi'] as Map<String, dynamic>;
     expect(p['ppi'], [800, 820, 800]);
     expect((p['blocker'] as List).length, 3);
     expect((ppi['minutes'] as List).single['extra'], isNotNull); // RMSSD
 
-    final acc = mon.stored.firstWhere((b) => b['type'] == 'acc');
+    final acc = server.stored.firstWhere((b) => b['type'] == 'acc');
     expect(acc['rate_hz'], 25);
     expect(acc['range'], 8);
     final chunks = acc['acc'] as List;
@@ -287,31 +287,31 @@ void main() {
     );
     await signIn();
     await online.run();
-    expect(mon.stored, isEmpty);
+    expect(server.stored, isEmpty);
     expect(await repo.unsentCount(), 0);
   });
 
-  test('an access token mon no longer takes is refreshed once', () async {
+  test('an access token the server no longer takes is refreshed once', () async {
     await repo.storeRecording('24BE2139', hrRecording(day, [60, 61]));
     await signIn();
-    mon.goodToken = 'at-2'; // the one the app holds has been replaced
+    server.goodToken = 'at-2'; // the one the app holds has been replaced
     await online.run();
 
-    expect(mon.tokensSeen, ['at-1', 'at-2']);
+    expect(server.tokensSeen, ['at-1', 'at-2']);
     expect(refreshes, 1);
-    expect(mon.stored.length, 1);
+    expect(server.stored.length, 1);
     expect(await repo.unsentCount(), 0);
   });
 
   test(
-    'a recording mon will never take is skipped, the rest still go',
+    'a recording the server will never take is skipped, the rest still go',
     () async {
       final bad = await repo.storeRecording('24BE2139', hrRecording(day, [60]));
       final good = await repo.storeRecording(
         '24BE2139',
         hrRecording(day.add(const Duration(hours: 1)), [61]),
       );
-      mon.refuse[day.millisecondsSinceEpoch] = (
+      server.refuse[day.millisecondsSinceEpoch] = (
         400,
         'invalid_recording',
         'the recording starts before 2020',
@@ -330,9 +330,9 @@ void main() {
       );
 
       // Not offered again in this run of the app.
-      final seen = mon.tokensSeen.length;
+      final seen = server.tokensSeen.length;
       await online.run();
-      expect(mon.tokensSeen.length, seen);
+      expect(server.tokensSeen.length, seen);
     },
   );
 
@@ -342,7 +342,7 @@ void main() {
       '24BE2139',
       hrRecording(day.add(const Duration(hours: 1)), [61]),
     );
-    mon.refuseAll = (
+    server.refuseAll = (
       403,
       'not_in_group',
       'marino is not in the heild_user group',
@@ -350,7 +350,7 @@ void main() {
     await signIn();
     await online.run();
 
-    expect(mon.tokensSeen.length, 1); // did not go on to the second
+    expect(server.tokensSeen.length, 1); // did not go on to the second
     expect(await repo.unsentCount(), 2);
     expect(online.lastOk, isFalse);
     expect(online.lastMessage, contains('not in the heild_user group'));
@@ -359,24 +359,24 @@ void main() {
   });
 
   test(
-    'mon unreachable: nothing is marked, and the next run sends it',
+    'the server is unreachable: nothing is marked, and the next run sends it',
     () async {
       await repo.storeRecording('24BE2139', hrRecording(day, [60, 61]));
       await signIn();
-      mon.down = true;
+      server.down = true;
       await online.run();
       expect(await repo.unsentCount(), 1);
       expect(online.lastOk, isFalse);
       expect(online.lastMessage, contains('could not be reached'));
 
-      mon.down = false;
+      server.down = false;
       await online.run();
       expect(await repo.unsentCount(), 0);
       expect(online.lastOk, isTrue);
     },
   );
 
-  test('the payload names the types mon knows', () {
+  test('the payload names the types the server knows', () {
     expect(monType(PolarDataType.hr), 'hr');
     expect(monType(PolarDataType.ppi), 'ppi');
     expect(monType(PolarDataType.acc), 'acc');

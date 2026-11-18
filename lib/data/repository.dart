@@ -894,7 +894,7 @@ class Repository {
   }
 
   /// What makes a recording one that online sync still has to send: not sent
-  /// (`sent_ms` unset), one of the types mon stores, and not a live session
+  /// (`sent_ms` unset), one of the types the server stores, and not a live session
   /// — the sensor's own recording replaces those at the next sync.
   static final _unsent =
       "sent_ms IS NULL AND source != 'live' AND type IN "
@@ -907,7 +907,7 @@ class Repository {
       0;
 
   /// The oldest recordings still to send, oldest first, leaving out the ids
-  /// in [except] (recordings mon has refused for good).
+  /// in [except] (recordings the server has refused for good).
   Future<List<RecordingRow>> unsentRecordings({
     int limit = 20,
     Set<int> except = const {},

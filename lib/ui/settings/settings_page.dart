@@ -211,7 +211,7 @@ class _StorageSectionState extends State<_StorageSection> {
         Row(
           children: [
             const Expanded(
-              child: Text('Delete recordings older than, once sent to mon'),
+              child: Text('Delete recordings older than, once sent to the server'),
             ),
             DropdownButton<int>(
               value: s.retentionDays,
@@ -279,7 +279,7 @@ class _AboutSection extends StatelessWidget {
           KeyValueList({
             'App': 'heild 1.0.0',
             'Polar BLE SDK': snap.data ?? '…',
-            'Data goes to': 'this phone (upload to mon over HTTPS later)',
+            'Data goes to': 'this phone (upload to the server over HTTPS later)',
           }),
         ],
       ),

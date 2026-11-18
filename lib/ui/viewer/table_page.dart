@@ -201,7 +201,7 @@ class _RecordingDetailPageState extends State<RecordingDetailPage> {
         title: Text('${r.type.label} · ${fmtMs(r.startMs)}'),
         actions: [
           IconButton(
-            tooltip: r.sent ? 'Mark as not sent to mon' : 'Mark as sent to mon',
+            tooltip: r.sent ? 'Mark as not sent to the server' : 'Mark as sent to the server',
             icon: Icon(r.sent ? Icons.cloud_done : Icons.cloud_upload_outlined),
             onPressed: () async {
               await repo.markSent(r.id, !r.sent);
@@ -243,7 +243,7 @@ class _RecordingDetailPageState extends State<RecordingDetailPage> {
               if (r.range != null) 'Range': '±${r.range} g',
               'Sensor file': r.path ?? '—',
               'Fetched': fmtMs(r.fetchedMs),
-              'Sent to mon': r.sentMs == null ? 'no' : fmtMs(r.sentMs!),
+              'Sent to the server': r.sentMs == null ? 'no' : fmtMs(r.sentMs!),
             }),
           ),
           const Divider(height: 1),

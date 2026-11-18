@@ -17,7 +17,7 @@ class OidcConfig {
       'openid',
       'profile',
       'email',
-      // So that mon can see the heild_user group when it is shown the access
+      // So that the server can see the heild_user group when it is shown the access
       // token: it accepts uploads from members only. A session from before
       // this scope was asked for has no groups in it and is refused there
       // until the person signs in again.
