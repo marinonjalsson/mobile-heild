@@ -6,7 +6,7 @@ import '../polar/models.dart';
 
 /// The name the server knows a recording type by, or null for a type that is not
 /// uploaded (only heart rate, pulse intervals and movement are stored).
-String? monType(PolarDataType t) => switch (t) {
+String? uploadType(PolarDataType t) => switch (t) {
   PolarDataType.hr => 'hr',
   PolarDataType.ppi => 'ppi',
   PolarDataType.acc => 'acc',
@@ -16,7 +16,7 @@ String? monType(PolarDataType t) => switch (t) {
 /// The `recordings.type` values that are uploaded, for SQL.
 final uploadedWireTypes = [
   for (final t in PolarDataType.values)
-    if (monType(t) != null) t.wire,
+    if (uploadType(t) != null) t.wire,
 ];
 
 /// One recording as `POST /api/upload` on heild.loria.is takes it (see
@@ -34,7 +34,7 @@ Future<Map<String, Object?>> buildUpload(
   RecordingRow r,
 ) async {
   final db = repo.db;
-  final type = monType(r.type);
+  final type = uploadType(r.type);
   if (type == null) {
     throw ArgumentError('${r.type.wire} recordings are not uploaded');
   }

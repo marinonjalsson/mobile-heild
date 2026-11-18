@@ -377,9 +377,9 @@ void main() {
   );
 
   test('the payload names the types the server knows', () {
-    expect(monType(PolarDataType.hr), 'hr');
-    expect(monType(PolarDataType.ppi), 'ppi');
-    expect(monType(PolarDataType.acc), 'acc');
+    expect(uploadType(PolarDataType.hr), 'hr');
+    expect(uploadType(PolarDataType.ppi), 'ppi');
+    expect(uploadType(PolarDataType.acc), 'acc');
     expect(uploadedWireTypes, containsAll(['HR', 'PPI', 'ACC']));
     expect(uploadedWireTypes.length, 3);
   });
