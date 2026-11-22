@@ -49,7 +49,7 @@ object Alert {
         nm.notify(
             NOTIFICATION_ID,
             Notification.Builder(context, channel)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_heild)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(Notification.BigTextStyle().bigText(text))

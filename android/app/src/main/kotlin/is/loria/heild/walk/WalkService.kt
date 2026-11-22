@@ -125,7 +125,7 @@ class WalkService : Service(), LocationListener {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_heild)
             .setContentTitle("heild · recording walk")
             .setContentText("Open heild and press Stop when the walk is over")
             .setContentIntent(open)
