@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../auth/authorizer.dart';
 import '../auth/oidc.dart';
@@ -9,6 +10,7 @@ import '../data/db.dart';
 import '../data/repository.dart';
 import '../online/upload_client.dart';
 import '../polar/models.dart';
+import '../walk/walk_bridge.dart';
 import 'app_settings.dart';
 import 'auth_controller.dart';
 import 'device_controller.dart';
@@ -17,6 +19,7 @@ import 'live_hr.dart';
 import 'live_ppi.dart';
 import 'online_sync.dart';
 import 'sync_service.dart';
+import 'walk_recorder.dart';
 
 /// Owns the database, settings and the sync service. One instance per app,
 /// created in `main.dart`, alive for the whole process (the Flutter engine is
@@ -37,6 +40,10 @@ class AppController extends ChangeNotifier {
 
   /// Upload of recordings to the server. Does nothing unless somebody is signed in.
   late final OnlineSyncService online;
+
+  /// GPS recording of walks (Walks tab). Listened to by that tab only: it
+  /// notifies on every fix and is not forwarded to this controller.
+  late final WalkRecorder walk;
   AppLifecycleListener? _lifecycle;
 
   bool _ready = false;
@@ -92,6 +99,15 @@ class AppController extends ChangeNotifier {
       );
       await online.run(reason: 'after sync');
     };
+    walk = WalkRecorder(const WalkBridge(), repo);
+    walk.ensurePermission = () async =>
+        (await Permission.locationWhenInUse.request()).isGranted;
+    walk.onFinished = () => unawaited(online.run(reason: 'walk finished'));
+    try {
+      await walk.init();
+    } catch (e) {
+      await repo.log('warn', 'open walks not closed: $e');
+    }
     online.addListener(notifyListeners);
     var signedIn = auth.isSignedIn;
     auth.addListener(() {
@@ -161,6 +177,7 @@ class AppController extends ChangeNotifier {
     livePpi.dispose();
     liveHr.dispose();
     sync.dispose();
+    walk.dispose();
     online.dispose();
     auth.dispose();
     super.dispose();

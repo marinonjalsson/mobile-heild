@@ -21,6 +21,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
   bool? _associated;
   bool? _batteryOk;
   PermissionStatus? _notifications;
+  PermissionStatus? _location;
 
   @override
   void initState() {
@@ -54,11 +55,13 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
       battery = await bridge.isIgnoringBatteryOptimizations();
     } catch (_) {}
     final notif = await Permission.notification.status;
+    final location = await Permission.locationWhenInUse.status;
     if (mounted) {
       setState(() {
         _associated = assoc;
         _batteryOk = battery;
         _notifications = notif;
+        _location = location;
       });
     }
   }
@@ -203,6 +206,18 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                     detail: 'Shows the sync status while connected in the background',
                     onFix: () async {
                       await Permission.notification.request();
+                      await _refresh();
+                    },
+                  ),
+                  _PermRow(
+                    label: 'Location',
+                    ok: _location?.isGranted,
+                    detail:
+                        'Only for the Walks tab: GPS between Start and Stop. '
+                        'Choose "Precise" and "While using the app".',
+                    onFix: () async {
+                      final s = await Permission.locationWhenInUse.request();
+                      if (s.isPermanentlyDenied) await openAppSettings();
                       await _refresh();
                     },
                   ),

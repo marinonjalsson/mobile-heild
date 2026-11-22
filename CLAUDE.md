@@ -34,6 +34,32 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
 - AGP is 9.1.1 (bumped 2026-11-18, the Flutter SDK refused 9.1.0). The build only warns now: Flutter will soon want
   Gradle 9.5.0, AGP 9.3.1 and Kotlin 2.4.20.
 
+## Walks (since 2026-11-22)
+
+A tab of its own, apart from the sensor: press Start, walk with the phone in a pocket, press Stop. Every GPS fix
+(about one a second) is stored with time, latitude, longitude, accuracy, altitude and speed.
+
+- **Own foreground service** (`walk/WalkService.kt`, type `location`, notification id 2, channel `heild.walk`), never
+  `HeildService`: the sensor sync stops that one after every round (`serviceIdle`), and a walk must outlive any number
+  of syncs. Android's own `LocationManager` with the GPS provider; no Google Play Services. Always started from the
+  visible app, so "while using the app" + precise location is enough and there is no background-location permission.
+- Channels `heild/walk` (`start`, `stop`, `isRunning`) and `heild/walk/points` (`WalkBridge.kt` ⇄ `lib/walk/walk_bridge.dart`).
+  `start` fails with the code `NoPreciseLocation` or `LocationOff`.
+- **Own tables** `walks` and `walk_points` (schema v5), not `recordings`: a walk has no sensor, no type and no minute
+  statistics. Retention never touches walks. `walks.ended = 0` while one is being recorded.
+- `WalkRecorder` (`lib/state/walk_recorder.dart`) buffers fixes and writes every 10 s and on Stop; a killed process
+  loses at most that, and `init()` ends the walk it left open at its last stored fix. **It is not forwarded through
+  `appController`**: it notifies on every fix and only the Walks tab listens to it.
+- Distance (`lib/walk/track.dart`, `TrackMeter`): a fix counts when its accuracy is 25 m or better and it is 5 m or
+  more from the last fix that counted; otherwise standing still adds up. Every fix is stored, also those not counted.
+- Altitude is above sea level when Android gives that (14 and later), otherwise above the WGS84 ellipsoid (in Iceland
+  about 65 m more).
+- Map: `flutter_map` with tiles from tile.openstreetmap.org (`lib/ui/walks/walk_map.dart`); the tile server learns
+  which area is looked at. Without network the route is drawn on nothing.
+- Upload: finished walks go after the recordings in the same run, `POST /api/walk` (`lib/online/walk_payload.dart` ⇄
+  `web/sites/heild/api/lib/walk.dart`, the two change together), same token and same answers as `/api/upload`.
+  Switch: `walkUploadEnabled` in `lib/state/features.dart`.
+
 ## Layout
 
 - `lib/polar/` — Dart side of the SDK bridge. `polar_bridge.dart` (channels), `models.dart`, `packed_recording.dart`
@@ -41,12 +67,14 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
 - `lib/auth/` — the Loria sign-in, no UI: `oidc.dart` (`OidcConfig`, token/userinfo/revocation over plain HTTPS),
   `authorizer.dart` (the browser part, flutter_appauth), `token_store.dart` (refresh token in the Android Keystore).
 - `lib/online/` — the upload to the server, no UI: `upload_payload.dart` (`buildUpload`: one recording as the server takes it),
-  `upload_client.dart` (`POST /api/upload`, `UploadException`).
+  `walk_payload.dart` (`buildWalkUpload`), `upload_client.dart` (`POST /api/upload`, `POST /api/walk`, `UploadException`).
+- `lib/walk/` — walks, no UI: `models.dart` (`WalkPoint`, `WalkRow`), `track.dart` (distance), `walk_bridge.dart` (channels).
 - `lib/data/` — SQLite: `db.dart` (schema), `repository.dart` (ingest, minute stats, queries, retention),
   `polar_time.dart` (Polar ns since 2000 → Unix ms, HR/PPI timestamp derivation), `acc_codec.dart` (zlib int16 chunks).
 - `lib/state/` — `device_controller.dart` (connection, SDK events, live streams), `app_settings.dart` (settings table),
   `sync_service.dart` (the sync state machine), `live_ppi.dart` / `live_hr.dart` (live streams stored as `live` recordings), `auth_controller.dart` (sign-in state, `accessToken()`), `online_sync.dart` (`OnlineSyncService`: sends unsent recordings), `app_controller.dart` (owns db/settings/sync/auth/online; global `appController` in `main.dart`).
-- `lib/ui/` — `home_page.dart` (Graphs / Device / Table / Online / Settings), `online/online_page.dart` (sign-in, account, online sync + Upload now, history), `viewer/` (`dashboard_page.dart` = the Device tab:
+- `lib/ui/` — `home_page.dart` (Graphs / Walks / Device / Table / Online / Settings), `walks/` (`walks_page.dart` Start/Stop,
+  live numbers and map, list; `walk_detail_page.dart`; `walk_map.dart`), `online/online_page.dart` (sign-in, account, online sync + Upload now, history), `viewer/` (`dashboard_page.dart` = the Device tab:
   sensor, sync, details, phone storage; `live_card.dart` the live cards shown on Graphs during a live session (HR card on
   Heart rate, PP-interval card on HRV);
   graphs via fl_chart `chart.dart` — `StatChart` pinch-zooms the time axis
@@ -62,6 +90,7 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
   - `HeildApp.kt` — Application; `EngineHolder` creates the ONE cached FlutterEngine at process start (Dart runs headless too);
     `MainActivity` attaches to it (`provideFlutterEngine`, never destroys it).
   - `service/HeildService.kt` — `connectedDevice` foreground service while talking to the sensor.
+  - `walk/WalkService.kt` + `walk/WalkBridge.kt` — `location` foreground service and channels for the Walks tab.
   - `companion/DevicePresenceService.kt` — subclass of the SDK's `PolarCompanionDeviceServiceBase`; replaces the SDK's own
     service in the manifest (`tools:node="remove"`), starts engine + foreground service, then lets the SDK deliver
     `companionDeviceAppeared` to Dart.
@@ -195,8 +224,9 @@ are neither recorded nor fetched nor shown. Two switches in `lib/state/features.
 - `minSdk 33`, `compileSdk 37` (permission_handler needs 37). JDK 21. Polar SDK 8.5.0 (`8.5.0-java17` exists if D8 complains).
 - `flutter analyze && flutter test` (DB tests run on the host via `sqflite_common_ffi`), then `flutter run -d <serial>` or
   `flutter build apk --debug` + `adb install -r`.
-- Runtime permissions: `BLUETOOTH_SCAN` (neverForLocation), `BLUETOOTH_CONNECT`, `POST_NOTIFICATIONS` (permission_handler).
-  Manifest also declares FOREGROUND_SERVICE(_CONNECTED_DEVICE), companion permissions and REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.
+- Runtime permissions: `BLUETOOTH_SCAN` (neverForLocation), `BLUETOOTH_CONNECT`, `POST_NOTIFICATIONS`, and for the Walks
+  tab `ACCESS_FINE_LOCATION` (asked at the first Start) (permission_handler).
+  Manifest also declares FOREGROUND_SERVICE(_CONNECTED_DEVICE, _LOCATION), companion permissions and REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.
 
 ## Out of scope for now
 

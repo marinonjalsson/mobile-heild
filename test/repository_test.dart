@@ -7,6 +7,7 @@ import 'package:heild/data/polar_time.dart';
 import 'package:heild/data/repository.dart';
 import 'package:heild/polar/models.dart';
 import 'package:heild/polar/packed_recording.dart';
+import 'package:heild/walk/models.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// Builds the Polar nanosecond stamp for a phone-local [DateTime].
@@ -90,6 +91,90 @@ void main() {
   });
 
   tearDown(() => db.close());
+
+  group('walks', () {
+    WalkPoint pt(int tsMs, double lat) =>
+        WalkPoint(tsMs: tsMs, lat: lat, lon: -21.9, accM: 4, speedMps: 1.3);
+
+    test('create, append, finish', () async {
+      final id = await repo.createWalk(1000);
+      expect(await repo.walks(), isEmpty, reason: 'not listed while recording');
+
+      await repo.appendWalkPoints(id, [pt(2000, 64.1), pt(3000, 64.2)], 12.5);
+      await repo.appendWalkPoints(id, [pt(3000, 64.25), pt(4000, 64.3)], 30);
+      var w = (await repo.walk(id))!;
+      expect(w.ended, isFalse);
+      expect(w.pointCount, 3, reason: 'a repeated time replaces the fix');
+      expect(w.endMs, 4000);
+      expect(w.distanceM, 30);
+
+      await repo.finishWalk(id, 5000, 31);
+      w = (await repo.walks()).single;
+      expect((w.ended, w.endMs, w.distanceM), (true, 5000, 31.0));
+
+      final points = await repo.walkPoints(id);
+      expect([for (final p in points) p.tsMs], [2000, 3000, 4000]);
+      expect(points[1].lat, 64.25);
+      expect(
+        (points[0].accM, points[0].altM, points[0].speedMps),
+        (4.0, null, 1.3),
+      );
+    });
+
+    test('delete takes the fixes along', () async {
+      final id = await repo.createWalk(1000);
+      await repo.appendWalkPoints(id, [pt(2000, 64.1)], 0);
+      await repo.deleteWalk(id);
+      expect(await repo.walk(id), isNull);
+      expect(await repo.db.query('walk_points'), isEmpty);
+    });
+
+    test(
+      'walks left open are ended at their last fix, empty ones go',
+      () async {
+        final cut = await repo.createWalk(1000);
+        await repo.appendWalkPoints(cut, [pt(2000, 64.1), pt(9000, 64.2)], 40);
+        final empty = await repo.createWalk(20000);
+
+        await repo.closeOpenWalks();
+        expect(await repo.walk(empty), isNull);
+        final w = (await repo.walks()).single;
+        expect((w.id, w.ended, w.endMs, w.distanceM), (cut, true, 9000, 40.0));
+      },
+    );
+
+    test('unsent: finished walks only, oldest first, until marked', () async {
+      final b = await repo.createWalk(5000);
+      await repo.appendWalkPoints(b, [pt(6000, 64.1)], 0);
+      await repo.finishWalk(b, 7000, 0);
+      final a = await repo.createWalk(1000);
+      await repo.appendWalkPoints(a, [pt(2000, 64.1)], 0);
+      await repo.finishWalk(a, 3000, 0);
+      final running = await repo.createWalk(9000);
+      await repo.appendWalkPoints(running, [pt(9500, 64.1)], 0);
+
+      expect(await repo.unsentWalkCount(), 2);
+      expect([for (final w in await repo.unsentWalks()) w.id], [a, b]);
+      expect(
+        [
+          for (final w in await repo.unsentWalks(except: {a})) w.id,
+        ],
+        [b],
+      );
+      await repo.markWalkSent(a, nowMs: 123);
+      expect([for (final w in await repo.unsentWalks()) w.id], [b]);
+      expect((await repo.walk(a))!.sentMs, 123);
+    });
+
+    test('retention leaves walks alone', () async {
+      final id = await repo.createWalk(1000);
+      await repo.appendWalkPoints(id, [pt(2000, 64.1)], 0);
+      await repo.finishWalk(id, 3000, 0);
+      await repo.markWalkSent(id);
+      await repo.retention(days: 1);
+      expect(await repo.walks(), hasLength(1));
+    });
+  });
 
   test('ACC chunk codec round trip', () {
     final xyz = Int32List.fromList([1, -2, 3, 16000, -16000, 0]);

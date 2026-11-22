@@ -14,6 +14,7 @@ import 'package:heild/polar/models.dart';
 import 'package:heild/polar/packed_recording.dart';
 import 'package:heild/state/auth_controller.dart';
 import 'package:heild/state/online_sync.dart';
+import 'package:heild/walk/models.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -291,17 +292,20 @@ void main() {
     expect(await repo.unsentCount(), 0);
   });
 
-  test('an access token the server no longer takes is refreshed once', () async {
-    await repo.storeRecording('24BE2139', hrRecording(day, [60, 61]));
-    await signIn();
-    server.goodToken = 'at-2'; // the one the app holds has been replaced
-    await online.run();
+  test(
+    'an access token the server no longer takes is refreshed once',
+    () async {
+      await repo.storeRecording('24BE2139', hrRecording(day, [60, 61]));
+      await signIn();
+      server.goodToken = 'at-2'; // the one the app holds has been replaced
+      await online.run();
 
-    expect(server.tokensSeen, ['at-1', 'at-2']);
-    expect(refreshes, 1);
-    expect(server.stored.length, 1);
-    expect(await repo.unsentCount(), 0);
-  });
+      expect(server.tokensSeen, ['at-1', 'at-2']);
+      expect(refreshes, 1);
+      expect(server.stored.length, 1);
+      expect(await repo.unsentCount(), 0);
+    },
+  );
 
   test(
     'a recording the server will never take is skipped, the rest still go',
@@ -382,5 +386,113 @@ void main() {
     expect(uploadType(PolarDataType.acc), 'acc');
     expect(uploadedWireTypes, containsAll(['HR', 'PPI', 'ACC']));
     expect(uploadedWireTypes.length, 3);
+  });
+  group('walks', () {
+    Future<int> walked(int startMs) async {
+      final id = await repo.createWalk(startMs);
+      await repo.appendWalkPoints(id, [
+        WalkPoint(tsMs: startMs + 1000, lat: 64.1, lon: -21.9, accM: 4.5),
+        WalkPoint(
+          tsMs: startMs + 2000,
+          lat: 64.1001,
+          lon: -21.9,
+          altM: 31,
+          speedMps: 1.4,
+        ),
+      ], 11.1);
+      await repo.finishWalk(id, startMs + 3000, 11.1);
+      return id;
+    }
+
+    /// A server that takes recordings and walks, and keeps them apart.
+    ({
+      OnlineSyncService online,
+      List<Map<String, dynamic>> walks,
+      List<String> paths,
+    })
+    withWalks({bool walks = true, int walkStatus = 200}) {
+      final got = <Map<String, dynamic>>[];
+      final paths = <String>[];
+      final client = MockClient((req) async {
+        paths.add(req.url.path);
+        expect(req.headers['Authorization'], 'Bearer at-1');
+        if (req.url.path == '/api/walk') {
+          if (walkStatus != 200) {
+            return http.Response(
+              jsonEncode({'error': 'invalid_walk', 'message': 'no good'}),
+              walkStatus,
+            );
+          }
+          got.add(jsonDecode(req.body) as Map<String, dynamic>);
+        }
+        return http.Response(jsonEncode({'ok': true}), 200);
+      });
+      return (
+        online: OnlineSyncService(
+          repo,
+          auth,
+          UploadClient(client: client),
+          walks: walks,
+        ),
+        walks: got,
+        paths: paths,
+      );
+    }
+
+    final t0 = day.millisecondsSinceEpoch;
+
+    test('a finished walk goes after the recordings, whole', () async {
+      final id = await walked(t0);
+      final open = await repo.createWalk(t0 + 100000); // being recorded
+      await repo.storeRecording('24BE2139', hrRecording(day, [60, 61, 62]));
+      await signIn();
+      final s = withWalks();
+      await s.online.run();
+
+      expect(s.paths, ['/api/upload', '/api/walk']);
+      expect(s.walks.single, {
+        'start_ms': t0,
+        'end_ms': t0 + 3000,
+        'distance_m': 11.1,
+        'points': {
+          'ts_ms': [t0 + 1000, t0 + 2000],
+          'lat': [64.1, 64.1001],
+          'lon': [-21.9, -21.9],
+          'acc_m': [4.5, null],
+          'alt_m': [null, 31.0],
+          'speed_mps': [null, 1.4],
+        },
+      });
+      expect((await repo.walk(id))!.sentMs, isNotNull);
+      expect((await repo.walk(open))!.sentMs, isNull);
+      expect(
+        s.online.lastMessage,
+        startsWith('sent 1 recordings and 1 walk ('),
+      );
+
+      await s.online.run();
+      expect(s.paths, hasLength(2), reason: 'nothing is sent twice');
+    });
+
+    test('a refused walk is skipped, the next one still goes', () async {
+      await walked(t0);
+      await signIn();
+      final s = withWalks(walkStatus: 400);
+      await s.online.run();
+      expect(await repo.unsentWalkCount(), 1);
+      expect(s.online.lastOk, isFalse);
+      await s.online.run();
+      expect(s.paths, ['/api/walk'], reason: 'not offered again');
+    });
+
+    test('with the switch off walks stay on the phone', () async {
+      await walked(t0);
+      await signIn();
+      final s = withWalks(walks: false);
+      await s.online.run();
+      expect(s.paths, isEmpty);
+      expect(await repo.unsentWalkCount(), 1);
+      expect(s.online.lastMessage, 'nothing to send');
+    });
   });
 }

@@ -6,9 +6,10 @@ import 'settings/settings_page.dart';
 import 'viewer/dashboard_page.dart';
 import 'viewer/graphs_page.dart';
 import 'viewer/table_page.dart';
+import 'walks/walks_page.dart';
 
-/// Bottom navigation: Graphs first, then the device, the table, the online
-/// sign-in, settings.
+/// Bottom navigation: Graphs first, then walks, the device, the table, the
+/// online sign-in, settings.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -34,6 +35,7 @@ class _HomePageState extends State<HomePage> {
             index: _index,
             children: const [
               GraphsPage(),
+              WalksPage(),
               DevicePage(),
               TablePage(),
               OnlinePage(),
@@ -47,6 +49,10 @@ class _HomePageState extends State<HomePage> {
               NavigationDestination(
                 icon: Icon(Icons.show_chart),
                 label: 'Graphs',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.directions_walk),
+                label: 'Walks',
               ),
               NavigationDestination(
                 icon: Icon(Icons.watch_outlined),

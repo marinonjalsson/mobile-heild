@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <!-- Polar BLE SDK: scan is never used for location. minSdk is 33, so no legacy BT/location permissions. -->
+    <!-- Polar BLE SDK: scan is never used for location. minSdk is 33, so no legacy BT/location
+         permissions; the location permissions further down are for the Walks tab only. -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"
@@ -13,6 +14,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <!-- Walks tab: GPS between Start and Stop, in a `location` foreground service so it goes on
+         with the screen off. Always started from the visible app: no background location. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Scheduled sync: the alarm is re-armed after a reboot. -->
@@ -54,6 +60,10 @@
             android:name=".service.HeildService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <service
+            android:name=".walk.WalkService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
         <receiver android:name=".service.SyncAlarmReceiver" android:exported="false" />
         <receiver android:name=".service.BootReceiver" android:exported="false">
             <intent-filter>

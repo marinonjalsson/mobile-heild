@@ -11,3 +11,9 @@ const liveEnabled = false;
 
 /// The types the app records on the sensor, fetches and shows.
 const supportedTypes = {PolarDataType.hr, PolarDataType.acc};
+
+/// Walks (GPS between Start and Stop) go to the server like the sensor's
+/// recordings: `POST /api/walk` on the heild site. Against a server that does
+/// not have the route yet the walks just stay unsent and the upload run ends
+/// with an error line.
+const walkUploadEnabled = true;

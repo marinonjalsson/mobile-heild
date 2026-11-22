@@ -5,7 +5,10 @@ import 'package:flutter/foundation.dart';
 import '../data/repository.dart';
 import '../online/upload_client.dart';
 import '../online/upload_payload.dart';
+import '../online/walk_payload.dart';
+import '../walk/models.dart';
 import 'auth_controller.dart';
+import 'features.dart';
 
 /// Sends recordings to the server: every recording the sensor made that has not
 /// been sent yet, oldest first, one request each, marked sent when the server says
@@ -21,11 +24,19 @@ import 'auth_controller.dart';
 /// "Sent" is what the phone's retention waits for: a recording older than
 /// the retention period is deleted only once it is marked sent.
 class OnlineSyncService extends ChangeNotifier {
-  OnlineSyncService(this._repo, this._auth, this._uploads);
+  OnlineSyncService(
+    this._repo,
+    this._auth,
+    this._uploads, {
+    this.walks = walkUploadEnabled,
+  });
 
   final Repository _repo;
   final AuthController _auth;
   final UploadClient _uploads;
+
+  /// Finished walks are sent too, after the recordings.
+  final bool walks;
 
   /// Called after a run that sent something (the table shows what is sent).
   VoidCallback? dataChanged;
@@ -53,6 +64,7 @@ class OnlineSyncService extends ChangeNotifier {
   /// restart they are tried once more, which is how a fix on the server's side
   /// reaches them.
   final _rejected = <int>{};
+  final _rejectedWalks = <int>{};
 
   Future<void> run({String reason = 'manual'}) async {
     if (!_auth.isSignedIn) return;
@@ -68,10 +80,12 @@ class OnlineSyncService extends ChangeNotifier {
     }
     running = true;
     done = 0;
-    total = await _repo.unsentCount();
+    total =
+        await _repo.unsentCount() + (walks ? await _repo.unsentWalkCount() : 0);
     notifyListeners();
 
     var sent = 0;
+    var walksSent = 0;
     var bytes = 0;
     var refused = 0;
     String? failure;
@@ -84,7 +98,10 @@ class OnlineSyncService extends ChangeNotifier {
         );
         if (batch.isEmpty) break;
         for (final r in batch) {
-          final outcome = await _send(r);
+          final outcome = await _send(
+            await buildUpload(_repo, r),
+            _uploads.upload,
+          );
           switch (outcome) {
             case _Sent(:final bytes_):
               await _repo.markSent(r.id, true);
@@ -107,6 +124,40 @@ class OnlineSyncService extends ChangeNotifier {
           }
         }
       }
+      walkBatches:
+      while (walks && failure == null) {
+        final batch = await _repo.unsentWalks(
+          limit: 20,
+          except: _rejectedWalks,
+        );
+        if (batch.isEmpty) break;
+        for (final WalkRow w in batch) {
+          final outcome = await _send(
+            await buildWalkUpload(_repo, w),
+            _uploads.uploadWalk,
+          );
+          switch (outcome) {
+            case _Sent(:final bytes_):
+              await _repo.markWalkSent(w.id);
+              walksSent++;
+              bytes += bytes_;
+              done++;
+              notifyListeners();
+            case _Refused(:final why):
+              _rejectedWalks.add(w.id);
+              refused++;
+              await _repo.onlineLog(
+                'push',
+                'The server refused the walk of '
+                    '${DateTime.fromMillisecondsSinceEpoch(w.startMs)}: $why',
+                ok: false,
+              );
+            case _Stopped(:final why):
+              failure = why;
+              break walkBatches;
+          }
+        }
+      }
     } catch (e) {
       failure = '$e';
     } finally {
@@ -114,19 +165,19 @@ class OnlineSyncService extends ChangeNotifier {
       lastRunAt = DateTime.now();
       if (failure != null) {
         lastOk = false;
-        lastMessage = sent == 0
+        lastMessage = sent + walksSent == 0
             ? failure
-            : 'sent $sent, then stopped: $failure';
+            : 'sent ${sent + walksSent}, then stopped: $failure';
       } else {
         lastOk = refused == 0;
-        lastMessage = sent == 0 && refused == 0
+        lastMessage = sent + walksSent == 0 && refused == 0
             ? 'nothing to send'
-            : 'sent $sent recordings (${_kb(bytes)})'
+            : 'sent ${_what(sent, walksSent)} (${_kb(bytes)})'
                   '${refused == 0 ? '' : ', $refused refused'}';
       }
       // One line of history per run that did or failed at something; a run
       // that found nothing to send is not history.
-      if (sent > 0 || failure != null) {
+      if (sent + walksSent > 0 || failure != null) {
         await _repo.onlineLog('push', lastMessage!, ok: failure == null);
         _auth.historyVersion++;
       }
@@ -139,13 +190,22 @@ class OnlineSyncService extends ChangeNotifier {
     }
   }
 
-  Future<_Outcome> _send(RecordingRow r) async {
+  /// "3 recordings", "1 walk", "3 recordings and 1 walk".
+  static String _what(int recordings, int walks) => [
+    if (recordings > 0 || walks == 0) '$recordings recordings',
+    if (walks > 0) walks == 1 ? '1 walk' : '$walks walks',
+  ].join(' and ');
+
+  /// Posts one [body] with [post] (a recording or a walk).
+  Future<_Outcome> _send(
+    Map<String, Object?> body,
+    Future<int> Function(String token, Map<String, Object?> body) post,
+  ) async {
     var token = await _auth.accessToken();
     if (token == null) return _Stopped(_noToken());
-    final body = await buildUpload(_repo, r);
     for (var attempt = 0; ; attempt++) {
       try {
-        return _Sent(await _uploads.upload(token!, body));
+        return _Sent(await post(token!, body));
       } on UploadException catch (e) {
         if (e.isUnauthorized && attempt == 0) {
           // The access token ran out between the check and the request, or

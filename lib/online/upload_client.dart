@@ -27,7 +27,7 @@ class UploadException implements Exception {
   String toString() => message;
 }
 
-/// The upload endpoint of the heild site (`web/sites/heild`, heild.loria.is): one recording per request,
+/// The upload endpoints of the heild site (`web/sites/heild`, heild.loria.is): one recording or one walk per request,
 /// the access token in the `Authorization` header. The server asks the sign-in
 /// service whose token it is and files the recording under that person.
 class UploadClient {
@@ -46,11 +46,22 @@ class UploadClient {
   /// Sends one recording (see `buildUpload`). Returns the number of bytes
   /// sent. Throws [UploadException] when the server refuses, and whatever the HTTP
   /// client throws when the server cannot be reached.
-  Future<int> upload(String accessToken, Map<String, Object?> recording) async {
-    final bytes = utf8.encode(jsonEncode(recording));
+  Future<int> upload(String accessToken, Map<String, Object?> recording) =>
+      _post('/api/upload', accessToken, recording);
+
+  /// Sends one walk (see `buildWalkUpload`); answers and errors as [upload].
+  Future<int> uploadWalk(String accessToken, Map<String, Object?> walk) =>
+      _post('/api/walk', accessToken, walk);
+
+  Future<int> _post(
+    String path,
+    String accessToken,
+    Map<String, Object?> body,
+  ) async {
+    final bytes = utf8.encode(jsonEncode(body));
     final res = await _http
         .post(
-          Uri.parse('$baseUrl/api/upload'),
+          Uri.parse('$baseUrl$path'),
           headers: {
             'Authorization': 'Bearer $accessToken',
             'Content-Type': 'application/json',
@@ -65,10 +76,10 @@ class UploadClient {
     String error = 'http_${res.statusCode}';
     String message = 'The server answered ${res.statusCode}';
     try {
-      final body = jsonDecode(utf8.decode(res.bodyBytes));
-      if (body is Map<String, Object?>) {
-        error = body['error'] as String? ?? error;
-        message = body['message'] as String? ?? message;
+      final answer = jsonDecode(utf8.decode(res.bodyBytes));
+      if (answer is Map<String, Object?>) {
+        error = answer['error'] as String? ?? error;
+        message = answer['message'] as String? ?? message;
       }
     } catch (_) {}
     throw UploadException(res.statusCode, error, message);

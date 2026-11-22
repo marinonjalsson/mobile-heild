@@ -9,6 +9,7 @@ import 'package:sqflite/sqflite.dart';
 import '../online/upload_payload.dart' show uploadedWireTypes;
 import '../polar/models.dart';
 import '../polar/packed_recording.dart';
+import '../walk/models.dart';
 import 'acc_codec.dart';
 import 'db.dart';
 import 'polar_time.dart';
@@ -922,6 +923,129 @@ class Repository {
     );
     return rows.map(RecordingRow.fromMap).toList();
   }
+
+  // ---- walks ----------------------------------------------------------------
+  //
+  // GPS between Start and Stop on the Walks tab. Tables of their own: a walk
+  // has no sensor, no type and no minute statistics, and retention leaves
+  // walks alone.
+
+  /// A new walk that is being recorded. Returns its id.
+  Future<int> createWalk(int startMs) => db.insert('walks', {
+    'start_ms': startMs,
+    'end_ms': startMs,
+  }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  /// Stores more fixes of a walk that is being recorded. [distanceM] is the
+  /// length of the whole walk so far.
+  Future<void> appendWalkPoints(
+    int walkId,
+    List<WalkPoint> points,
+    double distanceM,
+  ) async {
+    if (points.isEmpty) return;
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final p in points) {
+        batch.insert('walk_points', {
+          'walk_id': walkId,
+          'ts_ms': p.tsMs,
+          'lat': p.lat,
+          'lon': p.lon,
+          'acc_m': p.accM,
+          'alt_m': p.altM,
+          'speed_mps': p.speedMps,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await batch.commit(noResult: true);
+      await txn.rawUpdate(
+        '''
+        UPDATE walks SET end_ms = MAX(end_ms, ?), distance_m = ?,
+          point_count = (SELECT COUNT(*) FROM walk_points WHERE walk_id = ?)
+        WHERE id = ?''',
+        [points.last.tsMs, distanceM, walkId, walkId],
+      );
+    });
+  }
+
+  /// Stop was pressed at [endMs].
+  Future<void> finishWalk(int walkId, int endMs, double distanceM) => db.update(
+    'walks',
+    {'end_ms': endMs, 'distance_m': distanceM, 'ended': 1},
+    where: 'id = ?',
+    whereArgs: [walkId],
+  );
+
+  /// Ends the walks a killed process left open, each at its last stored fix,
+  /// and removes those that never got one. Called at start-up, when no walk
+  /// can be running.
+  Future<void> closeOpenWalks() async {
+    await db.delete('walks', where: 'ended = 0 AND point_count = 0');
+    await db.update('walks', {'ended': 1}, where: 'ended = 0');
+  }
+
+  /// Finished walks, newest first.
+  Future<List<WalkRow>> walks({int limit = 200}) async {
+    final rows = await db.query(
+      'walks',
+      where: 'ended = 1',
+      orderBy: 'start_ms DESC',
+      limit: limit,
+    );
+    return rows.map(WalkRow.fromMap).toList();
+  }
+
+  Future<WalkRow?> walk(int walkId) async {
+    final rows = await db.query('walks', where: 'id = ?', whereArgs: [walkId]);
+    return rows.isEmpty ? null : WalkRow.fromMap(rows.first);
+  }
+
+  /// The fixes of a walk in time order.
+  Future<List<WalkPoint>> walkPoints(int walkId) async {
+    final rows = await db.query(
+      'walk_points',
+      where: 'walk_id = ?',
+      whereArgs: [walkId],
+      orderBy: 'ts_ms',
+    );
+    return rows.map(WalkPoint.fromRow).toList();
+  }
+
+  /// Removes a walk and its fixes.
+  Future<void> deleteWalk(int walkId) =>
+      db.delete('walks', where: 'id = ?', whereArgs: [walkId]);
+
+  static const _unsentWalk = 'sent_ms IS NULL AND ended = 1';
+
+  Future<int> unsentWalkCount() async =>
+      Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM walks WHERE $_unsentWalk'),
+      ) ??
+      0;
+
+  /// Finished walks still to send, oldest first, leaving out the ids in
+  /// [except] (walks the server has refused for good).
+  Future<List<WalkRow>> unsentWalks({
+    int limit = 20,
+    Set<int> except = const {},
+  }) async {
+    final rows = await db.query(
+      'walks',
+      where: except.isEmpty
+          ? _unsentWalk
+          : '$_unsentWalk AND id NOT IN (${except.join(', ')})',
+      orderBy: 'start_ms',
+      limit: limit,
+    );
+    return rows.map(WalkRow.fromMap).toList();
+  }
+
+  Future<void> markWalkSent(int walkId, {int? nowMs}) => db.update(
+    'walks',
+    {'sent_ms': nowMs ?? DateTime.now().millisecondsSinceEpoch},
+    where: 'id = ?',
+    whereArgs: [walkId],
+  );
 
   Future<List<SyncLogRow>> syncLog({int limit = 200}) async {
     final rows = await db.query('sync_log', orderBy: 'id DESC', limit: limit);

@@ -9,7 +9,7 @@ class HeildDb {
   final Database db;
   final String path;
 
-  static const version = 4;
+  static const version = 5;
 
   /// Settings key set by a schema upgrade when `minute_stats` must be rebuilt
   /// from the raw rows (the app controller does it at start-up).
@@ -50,6 +50,11 @@ class HeildDb {
             // sets the version back without removing anything.
             await db.execute(_onlineLog);
           }
+          if (oldVersion < 5) {
+            // v5: walks recorded with the phone's GPS (the Walks tab).
+            await db.execute(_walks);
+            await db.execute(_walkPoints);
+          }
         },
       ),
     );
@@ -73,6 +78,33 @@ class HeildDb {
       ok INTEGER NOT NULL,
       message TEXT NOT NULL
     )''';
+
+  /// A walk: GPS between Start and Stop. `ended` is 0 while it is being
+  /// recorded; `distance_m` is `trackDistanceM` of its points.
+  static const _walks = '''
+    CREATE TABLE IF NOT EXISTS walks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      start_ms INTEGER NOT NULL UNIQUE,
+      end_ms INTEGER NOT NULL,
+      ended INTEGER NOT NULL DEFAULT 0,
+      point_count INTEGER NOT NULL DEFAULT 0,
+      distance_m REAL NOT NULL DEFAULT 0,
+      sent_ms INTEGER
+    )''';
+
+  /// Every fix as Android gave it: accuracy (m), altitude (m) and speed (m/s)
+  /// are null when the fix lacked them.
+  static const _walkPoints = '''
+    CREATE TABLE IF NOT EXISTS walk_points (
+      walk_id INTEGER NOT NULL REFERENCES walks(id) ON DELETE CASCADE,
+      ts_ms INTEGER NOT NULL,
+      lat REAL NOT NULL,
+      lon REAL NOT NULL,
+      acc_m REAL,
+      alt_m REAL,
+      speed_mps REAL,
+      PRIMARY KEY (walk_id, ts_ms)
+    ) WITHOUT ROWID''';
 
   static const _schema = [
     '''
@@ -147,5 +179,7 @@ class HeildDb {
       message TEXT NOT NULL
     )''',
     _onlineLog,
+    _walks,
+    _walkPoints,
   ];
 }

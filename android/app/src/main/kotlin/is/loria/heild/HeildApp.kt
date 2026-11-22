@@ -7,6 +7,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
 import `is`.loria.heild.polar.PolarBridge
+import `is`.loria.heild.walk.WalkBridge
 
 /**
  * Creates the one Flutter engine at process start, whoever started the process: the
@@ -20,7 +21,7 @@ class HeildApp : Application() {
     }
 }
 
-/** The cached Flutter engine and its Polar bridge. Main thread only. */
+/** The cached Flutter engine and its bridges (Polar, walks). Main thread only. */
 object EngineHolder {
     const val ENGINE_ID = "main"
 
@@ -31,12 +32,16 @@ object EngineHolder {
     var bridge: PolarBridge? = null
         private set
 
+    var walkBridge: WalkBridge? = null
+        private set
+
     fun ensure(context: Context): FlutterEngine {
         engine?.let { return it }
         val app = context.applicationContext
         // Plugins (permission_handler, sqflite, path_provider) register automatically.
         val e = FlutterEngine(app)
         bridge = PolarBridge(app, e.dartExecutor.binaryMessenger)
+        walkBridge = WalkBridge(app, e.dartExecutor.binaryMessenger)
         e.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
         FlutterEngineCache.getInstance().put(ENGINE_ID, e)
         engine = e

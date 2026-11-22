@@ -18,6 +18,11 @@ String fmtDuration(Duration d) {
   return '${d.inSeconds} s';
 }
 
+/// "850 m" below a kilometre, "3.42 km" from there.
+String fmtDistance(double metres) => metres < 1000
+    ? '${metres.round()} m'
+    : '${(metres / 1000).toStringAsFixed(2)} km';
+
 String fmtAgo(DateTime? t) {
   if (t == null) return 'never';
   final d = DateTime.now().difference(t);
