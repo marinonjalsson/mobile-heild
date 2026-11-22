@@ -3,7 +3,8 @@
 Flutter app (Android first). Long-term goal: help humans live healthy lives — body, mind, food.
 Milestone 1: full control of the Polar Verity Sense via the **official Polar BLE SDK**.
 Milestone 2: "wear it, forget it" — the sensor records HR/PPI/ACC on its own (offline recording,
-trigger on power-on); Android's Companion Device Manager wakes the app when the sensor is in range;
+trigger on power-on); the app syncs on a schedule (the Companion Device Manager association lets it start in the
+background; its presence wake-ups were switched off 2026-11-22);
 the app syncs the recordings into SQLite and shows graphs/tables.
 Milestone 3: optional Loria sign-in, and upload of every recording (raw samples + minute stats) to the heild site (`heild.loria.is`, repo `web/sites/heild`) over HTTPS
 with the signed-in user's token; the site shows each person their own data at `heild.loria.is`. MQTT was abandoned
@@ -112,8 +113,12 @@ A tab of its own, apart from the sensor: press Start, walk with the phone in a p
 - **No standing connection** (decided 2026-11-10 after a day of drain): every trigger connects, syncs and disconnects
   (`SyncService._rest`: auto-reconnect off, disconnect, `serviceIdle`). Triggers: the schedule (Kotlin `SyncSchedule`
   alarm, `setAndAllowWhileIdle`, re-armed on each fire and after boot; `HeildService` started with the `sync` extra sends
-  the app event `scheduledSync` to Dart), app start, app coming to the foreground with data older than 30 min, "Sync now",
-  and optionally presence (`autoSync`, off by default). A connect attempt gives up after `connectTimeout` (90 s) so the
+  the app event `scheduledSync` to Dart), app start, app coming to the foreground with data older than 30 min and "Sync now".
+  **Presence is not a trigger** (the `autoSync` setting was removed 2026-11-22): Android's watch reported the worn
+  sensor lost and found again every half minute, about a hundred wake-ups a day, each starting the foreground service
+  for nothing and together filling half the sync log. The SDK starts the watch when it is created and before every
+  connect (and adds one more listener each time), so `SyncService.stopPresence` (`companionStopObserving`) runs at app
+  start and in `_rest` after every connection. The association stays: it is what allows the background start. A connect attempt gives up after `connectTimeout` (90 s) so the
   SDK never scans for an absent sensor for long. With the phone's Bluetooth switched off (`bridge.bluetoothEnabled`,
   asked of Android) no attempt is made: the sync ends at once with "Bluetooth is off. Switch it on to sync."
 - One sync round (`SyncService._run`): set clock → stop running recordings → list → restart recordings + ensure trigger →

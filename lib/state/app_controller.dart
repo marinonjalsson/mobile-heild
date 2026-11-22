@@ -85,6 +85,8 @@ class AppController extends ChangeNotifier {
     liveHr = LiveHrService(device, repo, enabled: liveEnabled);
     sync = SyncService(device.bridge, device, repo, settings, livePpi, liveHr);
     await sync.loadRecordingStatus();
+    // The SDK resumed the presence watch when it was created.
+    unawaited(sync.stopPresence());
     livePpi.syncBusy = () => sync.isRunning;
     livePpi.liveWanted = () =>
         liveEnabled && sync.isLive && sync.liveType == PolarDataType.ppi;

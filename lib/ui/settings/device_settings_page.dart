@@ -103,7 +103,8 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                       },
                       'Android companion': switch (_associated) {
                         null => 'unknown',
-                        true => 'associated · wakes heild when in range',
+                        true =>
+                          'associated · lets heild sync in the background',
                         false => 'not yet · connect once and accept the Android dialog',
                       },
                     }),
@@ -163,17 +164,6 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage>
                       'when you open the app and on "Sync"; it disconnects '
                       'afterwards.',
                     ),
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text(
-                      'Also sync when the sensor comes into range',
-                    ),
-                    subtitle: const Text(
-                      'Android wakes heild when the sensor is switched on nearby',
-                    ),
-                    value: s.autoSync,
-                    onChanged: s.setAutoSync,
                   ),
                   Align(
                     alignment: Alignment.centerLeft,

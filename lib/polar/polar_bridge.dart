@@ -165,6 +165,11 @@ class PolarBridge {
   Future<bool> companionIsAssociated(String identifier) async =>
       (await _call<bool>('companionIsAssociated', {'identifier': identifier}))!;
 
+  /// Tells Android to stop watching for the associated sensors coming into
+  /// and going out of range. The association itself stays.
+  Future<void> companionStopObserving() =>
+      _call<void>('companionStopObserving');
+
   Future<void> companionRemove(String identifier) =>
       _call<void>('companionRemove', {'identifier': identifier});
 

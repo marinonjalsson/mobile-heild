@@ -201,8 +201,6 @@ class SyncService extends ChangeNotifier {
   bool _syncOnReady = false;
   Timer? _idle;
   Timer? _connectTimeout;
-  DateTime? _lastAppeared;
-  DateTime? _lastDisappeared;
   int? _scheduledHours;
 
   /// The user asked for live data; the connection stays up while true.
@@ -345,42 +343,16 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  bool _matchesPaired(String? identifier) {
-    if (identifier == null) return true;
-    final id = identifier.toUpperCase();
-    return id == settings.pairedDeviceId?.toUpperCase() ||
-        id == settings.pairedAddress?.toUpperCase();
-  }
-
   // ---- triggers -------------------------------------------------------------
 
   void _onEvent(PolarEvent e) {
     switch (e.type) {
       case 'companionDeviceAppeared':
-        // The SDK registers one presence listener per connection, so a single
-        // event arrives several times; act on it once.
-        final now = DateTime.now();
-        if (_lastAppeared != null &&
-            now.difference(_lastAppeared!) < const Duration(seconds: 15)) {
-          return;
-        }
-        _lastAppeared = now;
-        _log('info', 'sensor in range (${e.identifier})');
-        if (settings.autoSync && _matchesPaired(e.identifier)) {
-          unawaited(connectAndSync(reason: 'sensor appeared'));
-        } else if (!dc.isConnected && !_running) {
-          // The presence service started the foreground service; not needed.
-          unawaited(bridge.serviceIdle());
-        }
-      case 'companionDeviceDisappeared':
-        final now = DateTime.now();
-        if (_lastDisappeared != null &&
-            now.difference(_lastDisappeared!) < const Duration(seconds: 15)) {
-          return;
-        }
-        _lastDisappeared = now;
-        _log('info', 'sensor out of range (${e.identifier})');
-        _scheduleIdleCheck();
+        // Presence is not a trigger any more and is switched off after every
+        // connection (stopPresence), so this arrives only while connecting.
+        // The presence service started the foreground service; hand it back
+        // when no sync wants it.
+        if (!dc.isConnected && !_running) unawaited(bridge.serviceIdle());
       case 'scheduledSync':
         // Kotlin has put the alarm back on the schedule by now.
         final retry = _retryArmed;
@@ -940,9 +912,27 @@ class SyncService extends ChangeNotifier {
         _finishing = false;
       }
     }
+    await stopPresence();
     // A trigger that arrived meanwhile owns the service now.
     if (deviceIdle) await bridge.serviceIdle();
     notifyListeners();
+  }
+
+  /// Stops Android's watch for the sensor coming into range. The Polar SDK
+  /// starts it when it is created and again before every connect, so this
+  /// runs at app start and after every connection.
+  ///
+  /// Why (2026-11-22): the watch reported the worn sensor lost and found
+  /// again every half minute, some hundred times a day. Each time Android
+  /// woke the app and started the foreground service for nothing, and the
+  /// lines filled half the sync log. Nothing syncs on presence any more: the
+  /// schedule, the app start, coming to the foreground and "Sync" do.
+  Future<void> stopPresence() async {
+    try {
+      await bridge.companionStopObserving();
+    } catch (e) {
+      _log('warn', 'presence watch not stopped: $e');
+    }
   }
 
   /// Completes when the disconnect event has arrived (10 s at most).

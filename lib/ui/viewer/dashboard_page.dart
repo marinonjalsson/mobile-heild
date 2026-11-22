@@ -129,8 +129,8 @@ class _SensorCard extends StatelessWidget {
         title: 'Sensor',
         children: [
           const Text(
-            'No sensor paired yet. Pair your Polar Verity Sense once; after that it '
-            'connects on its own whenever it is on and in range.',
+            'No sensor paired yet. Pair your Polar Verity Sense once; after that '
+            'heild syncs with it on a schedule and when you open the app.',
           ),
           const SizedBox(height: 8),
           FilledButton.icon(

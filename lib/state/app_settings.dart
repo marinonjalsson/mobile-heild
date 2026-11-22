@@ -26,11 +26,6 @@ class AppSettings extends ChangeNotifier {
   int syncEveryHours = 2;
   int retentionDays = 30;
 
-  /// Also connect and sync whenever the sensor comes into range (Companion
-  /// Device Manager wake). Off by default: the schedule, opening the app and
-  /// "Sync now" are the triggers.
-  bool autoSync = false;
-
   bool get isPaired => pairedDeviceId != null;
 
   Future<void> load() async {
@@ -50,7 +45,6 @@ class AppSettings extends ChangeNotifier {
         int.tryParse(await _repo.getSetting('sync_every_hours') ?? '') ?? 2;
     retentionDays =
         int.tryParse(await _repo.getSetting('retention_days') ?? '') ?? 30;
-    autoSync = (await _repo.getSetting('auto_sync') ?? 'false') == 'true';
     notifyListeners();
   }
 
@@ -98,12 +92,6 @@ class AppSettings extends ChangeNotifier {
   Future<void> setRetentionDays(int days) async {
     retentionDays = days;
     await _repo.setSetting('retention_days', '$days');
-    notifyListeners();
-  }
-
-  Future<void> setAutoSync(bool v) async {
-    autoSync = v;
-    await _repo.setSetting('auto_sync', '$v');
     notifyListeners();
   }
 

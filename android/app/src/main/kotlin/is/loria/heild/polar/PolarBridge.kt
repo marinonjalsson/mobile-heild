@@ -251,6 +251,11 @@ class PolarBridge(context: Context, messenger: BinaryMessenger) : MethodChannel.
             "alertClear" -> { Alert.clear(appContext); result.success(null) }
             "companionAssociatedAddresses" -> run(result) { api.getAssociatedDeviceAddresses() }
             "companionIsAssociated" -> run(result) { api.isAssociated(id) }
+            // The SDK starts observing presence when it is created and before every
+            // connect; heild has no use for it (see SyncService.stopPresence).
+            "companionStopObserving" -> run(result) {
+                api.getAssociatedDeviceAddresses().forEach { api.stopObservingDevicePresence(it) }
+            }
             "companionRemove" -> run(result) { api.removeAssociation(id) }
             "companionRequestBackgroundPrivilege" -> {
                 val activity = ActivityHolder.current
