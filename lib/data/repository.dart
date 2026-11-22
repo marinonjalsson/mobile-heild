@@ -798,17 +798,55 @@ class Repository {
     whereArgs: [recordingId],
   );
 
-  /// Removes a recording and its rows, and recomputes the minutes it covered.
+  /// Removes a recording and its rows, and recomputes the minutes it covered:
+  /// those of its span, and those its rows actually lie in (a recording with a
+  /// broken end time covers no span at all).
   Future<void> deleteRecording(int recordingId) async {
     final r = await recording(recordingId);
     if (r == null) return;
     await db.transaction((txn) async {
-      await txn.delete('recordings', where: 'id = ?', whereArgs: [r.id]);
-      final minutes = <int>[
+      final minutes = <int>{
         for (var m = minuteFloor(r.startMs); m <= r.endMs; m += 60000) m,
-      ];
+      };
+      for (final table in const ['hr_samples', 'ppi_samples']) {
+        final rows = await txn.rawQuery(
+          'SELECT DISTINCT ts_ms / 60000 * 60000 AS m FROM $table '
+          'WHERE recording_id = ?',
+          [r.id],
+        );
+        minutes.addAll([for (final row in rows) row['m'] as int]);
+      }
+      final chunks = await txn.query(
+        'acc_chunks',
+        columns: ['start_ms', 'end_ms'],
+        where: 'recording_id = ?',
+        whereArgs: [r.id],
+      );
+      for (final c in chunks) {
+        final end = c['end_ms'] as int;
+        for (var m = minuteFloor(c['start_ms'] as int); m <= end; m += 60000) {
+          minutes.add(m);
+        }
+      }
+      await txn.delete('recordings', where: 'id = ?', whereArgs: [r.id]);
       await _recomputeMinutes(txn, r.type.wire, minutes);
     });
+  }
+
+  /// Removes the sensor recordings that end before they start (clock mix-ups
+  /// in the first days of the app). The server refuses them for good, so they
+  /// are never marked sent and retention would keep them for ever. Returns
+  /// how many were removed.
+  Future<int> deleteBrokenRecordings() async {
+    final rows = await db.query(
+      'recordings',
+      columns: ['id'],
+      where: "end_ms < start_ms AND source != 'live'",
+    );
+    for (final row in rows) {
+      await deleteRecording(row['id'] as int);
+    }
+    return rows.length;
   }
 
   /// Deletes recordings that ended more than [days] ago **and** were marked

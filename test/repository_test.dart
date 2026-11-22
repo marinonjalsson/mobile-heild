@@ -176,6 +176,35 @@ void main() {
     });
   });
 
+  test(
+    'a recording that ends before it starts is removed, stats too',
+    () async {
+      final start = DateTime(2026, 11, 9, 10);
+      final good = await repo.storeRecording(
+        '24BE2139',
+        hrRecording(start, [60, 61, 62]),
+      );
+      final bad = await repo.storeRecording(
+        '24BE2139',
+        hrRecording(start.add(const Duration(hours: 1)), [90, 91, 92]),
+      );
+      await repo.db.update(
+        'recordings',
+        {'end_ms': start.millisecondsSinceEpoch},
+        where: 'id = ?',
+        whereArgs: [bad],
+      );
+      expect(await repo.db.query('minute_stats'), hasLength(2));
+
+      expect(await repo.deleteBrokenRecordings(), 1);
+      expect(await repo.recording(bad), isNull);
+      expect(await repo.recording(good), isNotNull);
+      final stats = await repo.db.query('minute_stats');
+      expect(stats.single['minute_ms'], start.millisecondsSinceEpoch);
+      expect(await repo.deleteBrokenRecordings(), 0);
+    },
+  );
+
   test('ACC chunk codec round trip', () {
     final xyz = Int32List.fromList([1, -2, 3, 16000, -16000, 0]);
     expect(decodeAccChunk(encodeAccChunk(xyz, 0, 2)), xyz);

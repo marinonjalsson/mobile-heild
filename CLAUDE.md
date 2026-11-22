@@ -213,6 +213,9 @@ A tab of its own, apart from the sensor: press Start, walk with the phone in a p
   process, logged, the rest still go); 401 refresh once and retry, then stop; 403 stop — not in the group, **or a session
   from before the `groups` scope** (the server sees no groups in it; sign out and in once); anything else or no network: stop,
   retry at the next trigger. One `push` history row per run that sent or failed something.
+- Recordings that end before they start (clock mix-ups of 10–11 Nov 2026) are refused by the server for good, so they
+  would never be marked sent and never leave the phone: `Repository.deleteBrokenRecordings` removes them at app start
+  (asked for 2026-11-22; five were removed then).
 - Not uploaded: live sessions (the sensor's own recording replaces them). A headless upload after a scheduled sync runs
   only as long as the process lives after `serviceIdle`; whatever is cut short goes with the next run (uploads are
   idempotent on the server).

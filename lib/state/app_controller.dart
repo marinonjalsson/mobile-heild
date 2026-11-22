@@ -60,6 +60,13 @@ class AppController extends ChangeNotifier {
       await repo.setSetting(HeildDb.statsRebuildKey, '0');
       await repo.log('info', 'rebuilt statistics for $n minutes');
     }
+    final broken = await repo.deleteBrokenRecordings();
+    if (broken > 0) {
+      await repo.log(
+        'info',
+        'removed $broken recordings that end before they start',
+      );
+    }
     const oidc = OidcConfig();
     auth = AuthController(
       repo,
